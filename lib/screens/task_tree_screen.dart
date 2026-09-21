@@ -212,7 +212,7 @@ class TaskTreeScreen extends StatelessWidget {
   }
 
   // ============================================================
-  // 静态节点：已完成、中断失败的链条（完全不触发任何拖动位移动画）
+  // 静态节点：已完成、中断失败的链条（展示标签与备注）
   // ============================================================
 
   Widget _buildStaticHistoricalTask(BuildContext context, CtdpTask task, int depth) {
@@ -241,12 +241,14 @@ class TaskTreeScreen extends StatelessWidget {
         child: ListTile(
           dense: true,
           visualDensity: VisualDensity.compact,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
           title: Row(
             children: [
               Expanded(
                 child: Text(
                   '#$taskNum ${task.title}$overtimeLabel',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 14,
                     fontWeight: isFailed ? FontWeight.w700 : FontWeight.w600,
@@ -255,9 +257,27 @@ class TaskTreeScreen extends StatelessWidget {
                   ),
                 ),
               ),
+              if (task.tags.isNotEmpty)
+                Wrap(
+                  spacing: 4,
+                  children: task.tags.take(2).map((tag) {
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.shade100,
+                        border: Border.all(color: Colors.grey.shade300),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        '#$tag',
+                        style: const TextStyle(fontSize: 10, color: CtdpColors.textSecondary),
+                      ),
+                    );
+                  }).toList(),
+                ),
               if (task.isChainEnd)
                 Container(
-                  margin: const EdgeInsets.only(right: 6),
+                  margin: const EdgeInsets.only(left: 6),
                   padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
                   decoration: BoxDecoration(
                     border: Border.all(color: Colors.green.shade300),
@@ -270,6 +290,17 @@ class TaskTreeScreen extends StatelessWidget {
                 ),
             ],
           ),
+          subtitle: task.notes.isNotEmpty
+              ? Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    task.notes,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                  ),
+                )
+              : null,
           trailing: PopupMenuButton<String>(
             padding: EdgeInsets.zero,
             iconSize: 18,
@@ -297,7 +328,7 @@ class TaskTreeScreen extends StatelessWidget {
   }
 
   // ============================================================
-  // 动态待办节点：支持长按拖动、跨文件夹任意穿梭、落位吸附
+  // 动态待办节点：支持长按拖动（展示标签与备注）
   // ============================================================
 
   Widget _buildMovablePendingTask(BuildContext context, CtdpTask task, int depth, int indexInFolder) {
@@ -313,15 +344,52 @@ class TaskTreeScreen extends StatelessWidget {
       child: ListTile(
         dense: true,
         visualDensity: VisualDensity.compact,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-        title: Text(
-          '#$taskNum ${task.title}',
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: CtdpColors.textPrimary,
-          ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        title: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '#$taskNum ${task.title}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: CtdpColors.textPrimary,
+                ),
+              ),
+            ),
+            if (task.tags.isNotEmpty)
+              Wrap(
+                spacing: 4,
+                children: task.tags.take(2).map((tag) {
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      border: Border.all(color: Colors.grey.shade300),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '#$tag',
+                      style: const TextStyle(fontSize: 10, color: CtdpColors.textSecondary),
+                    ),
+                  );
+                }).toList(),
+              ),
+          ],
         ),
+        subtitle: task.notes.isNotEmpty
+            ? Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  task.notes,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                ),
+              )
+            : null,
         trailing: PopupMenuButton<String>(
           padding: EdgeInsets.zero,
           iconSize: 18,
@@ -356,7 +424,6 @@ class TaskTreeScreen extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // 跨待办移动时的落位指示条（只有目标空隙平滑显示，绝不挤压卡片）
               if (isHovered)
                 Container(
                   height: 3,
@@ -474,10 +541,10 @@ class TaskTreeScreen extends StatelessWidget {
             },
           ),
 
-          // 1. 历史链条：完全静态呈现，拖动经过绝不触发任何动画
+          // 1. 历史链条任务（带标签与备注）
           ...historicalTasks.map((t) => _buildStaticHistoricalTask(context, t, depth + 1)),
 
-          // 2. 待办链条：纯净支持长按拖动，跨文件夹随意穿插
+          // 2. 未完成待办任务（带标签与备注，支持跨文件夹长按穿梭）
           ...List.generate(pendingTasks.length, (i) {
             final t = pendingTasks[i];
             final realIndex = historicalTasks.length + i;

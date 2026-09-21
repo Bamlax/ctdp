@@ -168,7 +168,7 @@ class CtdpController extends ChangeNotifier {
 
   Future<void> concludeChain(String taskId) async {
     _state = _state.copyWith(
-      tasks: tasks.map((t) {
+      tasks: tasks.map<CtdpTask>((t) {
         if (t.id != taskId) return t;
         return t.copyWith(isChainEnd: true);
       }).toList(),
@@ -209,11 +209,6 @@ class CtdpController extends ChangeNotifier {
     return targetTask.title;
   }
 
-  // ============================================================
-  // 核心修复：任务树中跨文件夹任意移动待办任务
-  // 同步立即刷新状态避免卡顿闪烁，并保证未完成任务不侵入历史区间
-  // ============================================================
-
   Future<void> moveTaskInTree({
     required String taskId,
     required String targetFolderId,
@@ -224,7 +219,6 @@ class CtdpController extends ChangeNotifier {
 
     final folderTasks = tasks.where((t) => t.folderId == targetFolderId && t.id != taskId).toList();
 
-    // 严密安全防线：未完成任务绝不允许排入已完成或失败节点之前
     int minPendingIndex = 0;
     while (minPendingIndex < folderTasks.length && !folderTasks[minPendingIndex].isPending) {
       minPendingIndex++;
@@ -251,18 +245,21 @@ class CtdpController extends ChangeNotifier {
     }
     updatedTasksList.addAll(tasks.where((t) => t.folderId == null && t.id != taskId));
 
-    // 同步立即更新内存与通知 UI，消除闪烁等待
     _state = _state.copyWith(tasks: updatedTasksList);
     notifyListeners();
     await _storage.saveState(_state);
   }
 
-  int folderHeight(String folderId) {
+  int folderHeight(String folderId, [Set<String>? visited]) {
+    final seen = visited ?? <String>{};
+    if (seen.contains(folderId)) return 0;
+    seen.add(folderId);
+
     final children = folders.where((f) => f.parentId == folderId).toList();
     if (children.isEmpty) return 0;
     int maxChild = 0;
     for (final child in children) {
-      final h = folderHeight(child.id);
+      final h = folderHeight(child.id, Set<String>.from(seen));
       if (h > maxChild) maxChild = h;
     }
     return maxChild + 1;
@@ -285,6 +282,7 @@ class CtdpController extends ChangeNotifier {
 
   List<CtdpFolderOption> getFolderOptions() {
     final result = <CtdpFolderOption>[];
+    final visited = <String>{};
 
     void walk(String? parentId) {
       final children = folders
@@ -293,6 +291,8 @@ class CtdpController extends ChangeNotifier {
         ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
       for (final folder in children) {
+        if (visited.contains(folder.id)) continue;
+        visited.add(folder.id);
         result.add(
           CtdpFolderOption(
             id: folder.id,
@@ -304,6 +304,19 @@ class CtdpController extends ChangeNotifier {
     }
 
     walk(null);
+
+    for (final folder in folders) {
+      if (!visited.contains(folder.id)) {
+        visited.add(folder.id);
+        result.add(
+          CtdpFolderOption(
+            id: folder.id,
+            label: folder.name,
+          ),
+        );
+      }
+    }
+
     return result;
   }
 
@@ -316,7 +329,6 @@ class CtdpController extends ChangeNotifier {
     notifyListeners();
   }
 
-  // 关键修复：同步优先通知 UI，后台异步持久化，杜绝重绘等待闪烁
   Future<void> _persist() async {
     notifyListeners();
     await _storage.saveState(_state);
@@ -387,7 +399,7 @@ class CtdpController extends ChangeNotifier {
       createdAt: DateTime.now(),
     );
 
-    final updatedFolders = folders.map((item) {
+    final updatedFolders = folders.map<CtdpFolder>((item) {
       if (item.id == targetFolderId) {
         return item.copyWith(parentId: newParentFolder.id);
       }
@@ -409,7 +421,7 @@ class CtdpController extends ChangeNotifier {
 
     _state = _state.copyWith(
       folders: folders
-          .map((item) =>
+          .map<CtdpFolder>((item) =>
               item.id == folderId ? item.copyWith(name: cleanName) : item)
           .toList(),
     );
@@ -480,6 +492,8 @@ class CtdpController extends ChangeNotifier {
     String unitType = '学习',
     required int durationMinutes,
     required int appointmentMinutes,
+    List<String> tags = const [],
+    String notes = '',
   }) async {
     final cleanTitle = title.trim();
     if (cleanTitle.isEmpty) return null;
@@ -501,6 +515,8 @@ class CtdpController extends ChangeNotifier {
       completedChainNumber: null,
       overtimeSeconds: 0,
       isChainEnd: false,
+      tags: tags,
+      notes: notes.trim(),
       createdAt: DateTime.now(),
       completedAt: null,
     );
@@ -518,6 +534,8 @@ class CtdpController extends ChangeNotifier {
     required String unitType,
     required int durationMinutes,
     required int appointmentMinutes,
+    List<String> tags = const [],
+    String notes = '',
   }) async {
     final task = taskById(taskId);
     if (task == null) throw StateError('任务不存在。');
@@ -535,7 +553,7 @@ class CtdpController extends ChangeNotifier {
     }
 
     _state = _state.copyWith(
-      tasks: tasks.map((item) {
+      tasks: tasks.map<CtdpTask>((item) {
         if (item.id != taskId) return item;
         return item.copyWith(
           title: cleanTitle,
@@ -546,6 +564,8 @@ class CtdpController extends ChangeNotifier {
               ? durationMinutes * 60
               : 0,
           appointmentMinutes: appointmentMinutes,
+          tags: tags,
+          notes: notes.trim(),
         );
       }).toList(),
     );
@@ -574,7 +594,7 @@ class CtdpController extends ChangeNotifier {
 
   Future<void> resetTaskCompletion(String taskId) async {
     _state = _state.copyWith(
-      tasks: tasks.map((item) {
+      tasks: tasks.map<CtdpTask>((item) {
         if (item.id == taskId) {
           return item.copyWith(
             clearCompletedAt: true,
@@ -592,7 +612,7 @@ class CtdpController extends ChangeNotifier {
 
   Future<void> clearAllHistory() async {
     _state = _state.copyWith(
-      tasks: tasks.map((item) {
+      tasks: tasks.map<CtdpTask>((item) {
         return item.copyWith(
           clearCompletedAt: true,
           clearFailedAt: true,
@@ -605,10 +625,6 @@ class CtdpController extends ChangeNotifier {
     );
     await _persist();
   }
-
-  // ============================================================
-  // 运行与控制
-  // ============================================================
 
   Future<void> startTask(String taskId, {bool bypassReservation = false}) async {
     if (hasActiveSession) {
@@ -625,7 +641,7 @@ class CtdpController extends ChangeNotifier {
 
     if (task.isCompleted || task.isFailed) {
       _state = _state.copyWith(
-        tasks: tasks.map((item) {
+        tasks: tasks.map<CtdpTask>((item) {
           return item.id == taskId
               ? item.copyWith(
                   clearCompletedAt: true,
@@ -712,7 +728,7 @@ class CtdpController extends ChangeNotifier {
     final currentNum = task != null ? getTaskNumber(task) : 1;
 
     _state = _state.copyWith(
-      tasks: tasks.map((item) {
+      tasks: tasks.map<CtdpTask>((item) {
         if (item.id != taskId) return item;
         return item.copyWith(
           completedAt: DateTime.now(),
@@ -746,7 +762,7 @@ class CtdpController extends ChangeNotifier {
     );
 
     _state = _state.copyWith(
-      tasks: tasks.map((item) {
+      tasks: tasks.map<CtdpTask>((item) {
         if (item.id != taskId) return item;
         return item.copyWith(
           failedAt: DateTime.now(),

@@ -26,10 +26,13 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
   late final TextEditingController _titleController;
   late final TextEditingController _durationController;
   late final TextEditingController _appointmentController;
+  late final TextEditingController _tagInputController;
+  late final TextEditingController _notesController;
 
   String? _selectedFolder;
   late TaskTimerMode _timerMode;
   late String _unitType;
+  final List<String> _tags = [];
 
   CtdpTask? get task => widget.taskId == null
       ? null
@@ -52,10 +55,16 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
     _appointmentController = TextEditingController(
       text: '${currentTask?.appointmentMinutes ?? settings.defaultAppointmentMinutes}',
     );
+    _tagInputController = TextEditingController();
+    _notesController = TextEditingController(text: currentTask?.notes ?? '');
 
     _timerMode = currentTask?.timerMode ?? TaskTimerMode.countDown;
     _unitType = currentTask?.unitType ??
         (settings.unitTypes.isNotEmpty ? settings.unitTypes.first : '综合');
+
+    if (currentTask != null) {
+      _tags.addAll(currentTask.tags);
+    }
 
     final folders = widget.controller.getFolderOptions();
     if (currentTask?.folderId != null) {
@@ -73,7 +82,26 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
     _titleController.dispose();
     _durationController.dispose();
     _appointmentController.dispose();
+    _tagInputController.dispose();
+    _notesController.dispose();
     super.dispose();
+  }
+
+  void _addTag() {
+    final text = _tagInputController.text.trim();
+    if (text.isEmpty) return;
+    if (!_tags.contains(text)) {
+      setState(() {
+        _tags.add(text);
+      });
+    }
+    _tagInputController.clear();
+  }
+
+  void _removeTag(String tag) {
+    setState(() {
+      _tags.remove(tag);
+    });
   }
 
   Future<void> _showAddUnitTypeDialog() async {
@@ -156,6 +184,8 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
           unitType: _unitType,
           durationMinutes: _timerMode == TaskTimerMode.countDown ? duration : 0,
           appointmentMinutes: appointment,
+          tags: _tags,
+          notes: _notesController.text.trim(),
         );
         if (!mounted) return;
         Navigator.of(context).pop(true);
@@ -167,6 +197,8 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
           unitType: _unitType,
           durationMinutes: _timerMode == TaskTimerMode.countDown ? duration : 0,
           appointmentMinutes: appointment,
+          tags: _tags,
+          notes: _notesController.text.trim(),
         );
         if (!mounted) return;
         Navigator.of(context).pop(newId);
@@ -228,6 +260,11 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
   Widget build(BuildContext context) {
     final folders = widget.controller.getFolderOptions();
     final unitTypes = widget.controller.settings.unitTypes;
+
+    // 安全防御：确保选中的文件夹必定有效存在于下拉项中，防止底层断言报错
+    final effectiveFolder = folders.any((f) => f.id == _selectedFolder)
+        ? _selectedFolder
+        : (folders.isNotEmpty ? folders.first.id : null);
 
     if (!widget.isEditing && folders.isEmpty) {
       return Scaffold(
@@ -304,7 +341,7 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
             const SizedBox(height: 16),
 
             DropdownButtonFormField<String>(
-              value: _selectedFolder,
+              value: effectiveFolder,
               isExpanded: true,
               decoration: const InputDecoration(
                 labelText: '所属文件夹（必选）',
@@ -380,9 +417,59 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
                 isDense: true,
               ),
             ),
+            const SizedBox(height: 16),
+
+            // 标签输入框：将添加按钮内嵌为 suffixIcon，从根源上杜绝 Row 布局引发的无限宽崩溃
+            TextField(
+              controller: _tagInputController,
+              decoration: InputDecoration(
+                labelText: '添加标签',
+                hintText: '输入标签名称后回车或点击右侧按钮添加',
+                border: const OutlineInputBorder(),
+                isDense: true,
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.add_circle_outline, color: CtdpColors.primary),
+                  tooltip: '添加标签',
+                  onPressed: _addTag,
+                ),
+              ),
+              onSubmitted: (_) => _addTag(),
+            ),
+            if (_tags.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: _tags.map((tag) {
+                  return Chip(
+                    label: Text(
+                      '#$tag',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    deleteIcon: const Icon(Icons.close, size: 14),
+                    onDeleted: () => _removeTag(tag),
+                  );
+                }).toList(),
+              ),
+            ],
+            const SizedBox(height: 16),
+
+            // 备注说明输入框
+            TextField(
+              controller: _notesController,
+              maxLines: 3,
+              decoration: const InputDecoration(
+                labelText: '备注说明',
+                hintText: '记录任务详情、核心要点或注意事项...',
+                border: OutlineInputBorder(),
+                alignLabelWithHint: true,
+              ),
+            ),
             const SizedBox(height: 28),
 
-            // 确定与取消：左取消、右确定，均带外框
+            // 确定与取消：左取消、右确定，均带外框保持原汁原味
             Row(
               children: [
                 Expanded(

@@ -186,10 +186,15 @@ class CtdpTask {
   final int? completedChainNumber;
   final int overtimeSeconds; // 倒计时超时时长（秒）
   final bool isChainEnd;      // 是否主动完结该链
+  final List<String> tags;    // 标签列表
+  final String notes;         // 备注文本
   final DateTime? failedAt;
   final String? failureReason;
   final DateTime createdAt;
   final DateTime? completedAt;
+
+  // 别名兼容支持 task.note
+  String get note => notes;
 
   const CtdpTask({
     required this.id,
@@ -202,6 +207,8 @@ class CtdpTask {
     this.completedChainNumber,
     this.overtimeSeconds = 0,
     this.isChainEnd = false,
+    this.tags = const [],
+    this.notes = '',
     this.failedAt,
     this.failureReason,
     required this.createdAt,
@@ -222,6 +229,8 @@ class CtdpTask {
     int? completedChainNumber,
     int? overtimeSeconds,
     bool? isChainEnd,
+    List<String>? tags,
+    String? notes,
     DateTime? failedAt,
     String? failureReason,
     DateTime? completedAt,
@@ -242,6 +251,8 @@ class CtdpTask {
           : completedChainNumber ?? this.completedChainNumber,
       overtimeSeconds: overtimeSeconds ?? this.overtimeSeconds,
       isChainEnd: isChainEnd ?? this.isChainEnd,
+      tags: tags ?? this.tags,
+      notes: notes ?? this.notes,
       failedAt: clearFailedAt ? null : failedAt ?? this.failedAt,
       failureReason: clearFailedAt ? null : failureReason ?? this.failureReason,
       createdAt: createdAt,
@@ -261,6 +272,8 @@ class CtdpTask {
       'completedChainNumber': completedChainNumber,
       'overtimeSeconds': overtimeSeconds,
       'isChainEnd': isChainEnd,
+      'tags': tags,
+      'notes': notes,
       'failedAt': failedAt?.toIso8601String(),
       'failureReason': failureReason,
       'createdAt': createdAt.toIso8601String(),
@@ -280,6 +293,8 @@ class CtdpTask {
   }
 
   factory CtdpTask.fromJson(Map<String, dynamic> json) {
+    final rawTags = json['tags'] as List<dynamic>?;
+
     return CtdpTask(
       id: json['id'] as String,
       title: json['title'] as String,
@@ -291,6 +306,8 @@ class CtdpTask {
       completedChainNumber: json['completedChainNumber'] as int?,
       overtimeSeconds: (json['overtimeSeconds'] as int?) ?? 0,
       isChainEnd: (json['isChainEnd'] as bool?) ?? false,
+      tags: rawTags != null ? rawTags.map((e) => e.toString()).toList() : const [],
+      notes: (json['notes'] as String?) ?? '',
       failedAt: json['failedAt'] == null ? null : DateTime.parse(json['failedAt'] as String),
       failureReason: json['failureReason'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
@@ -449,7 +466,7 @@ class CtdpState {
 
   Map<String, dynamic> toJson() {
     return {
-      'version': 9,
+      'version': 10,
       'folders': folders.map((f) => f.toJson()).toList(),
       'tasks': tasks.map((t) => t.toJson()).toList(),
       'failures': failures.map((f) => f.toJson()).toList(),

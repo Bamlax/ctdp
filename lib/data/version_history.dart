@@ -13,6 +13,13 @@ class VersionRecord {
 
 /// CTDP 版本更新记录
 const List<VersionRecord> ctdpVersionHistory = [
+    VersionRecord(
+    version: '0.2.0',
+    releaseDate: '2026-09-21',
+    changes: [
+      '新增待办的标签和备注功能',
+    ],
+  ),
   VersionRecord(
     version: '0.1.0',
     releaseDate: '2026-09-21',

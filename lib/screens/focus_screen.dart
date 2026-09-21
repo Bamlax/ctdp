@@ -492,6 +492,27 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
             Text(currentTask.isCompleted
                 ? '已落块编号：#$taskNum'
                 : '当前目标编号：#$taskNum (未完成将重回 #1)'),
+            if (currentTask.tags.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('标签：'),
+                  Expanded(
+                    child: Wrap(
+                      spacing: 4,
+                      children: currentTask.tags
+                          .map((t) => Text('#$t', style: const TextStyle(color: CtdpColors.primary, fontWeight: FontWeight.w600)))
+                          .toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (currentTask.notes.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Text('备注：${currentTask.notes}'),
+            ],
           ],
         ),
       ),

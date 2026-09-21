@@ -305,6 +305,8 @@ class HomeScreen extends StatelessWidget {
                       statusDesc = '正计时';
                     }
 
+                    final baseSubtitle = folder == null ? statusDesc : '${folder.name} · $statusDesc';
+
                     return Card(
                       key: ValueKey('home_${task.id}'),
                       margin: const EdgeInsets.only(bottom: 6),
@@ -316,17 +318,57 @@ class HomeScreen extends StatelessWidget {
                       child: ListTile(
                         dense: true,
                         visualDensity: VisualDensity.compact,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
-                        title: Text(
-                          '#$taskNum ${task.title}',
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: isActive ? CtdpColors.primary : CtdpColors.textPrimary,
-                          ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+                        title: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                '#$taskNum ${task.title}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w600,
+                                  color: isActive ? CtdpColors.primary : CtdpColors.textPrimary,
+                                ),
+                              ),
+                            ),
+                            if (task.tags.isNotEmpty)
+                              Wrap(
+                                spacing: 4,
+                                children: task.tags.take(2).map((tag) {
+                                  return Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                    decoration: BoxDecoration(
+                                      color: Colors.grey.shade100,
+                                      border: Border.all(color: Colors.grey.shade300),
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      '#$tag',
+                                      style: const TextStyle(fontSize: 10, color: CtdpColors.textSecondary),
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                          ],
                         ),
-                        subtitle: Text(
-                          folder == null ? statusDesc : '${folder.name} · $statusDesc',
-                          style: const TextStyle(fontSize: 12, color: CtdpColors.textSecondary),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              baseSubtitle,
+                              style: const TextStyle(fontSize: 12, color: CtdpColors.textSecondary),
+                            ),
+                            if (task.notes.isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                task.notes,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                              ),
+                            ],
+                          ],
                         ),
                         trailing: const Icon(Icons.chevron_right, size: 18),
                         onTap: () => _openTask(context, task),

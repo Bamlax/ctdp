@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_container"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/ctdp_widget_bg"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:id="@+id/widget_tag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="CTDP · 辅助链"
+        android:textColor="#888888"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/widget_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:text="#"
+        android:textColor="#1976D2"
+        android:textSize="26sp"
+        android:textStyle="bold" />
+
+    <!-- 使用 drawable 背景，彻底解决色值解析崩溃 -->
+    <TextView
+        android:id="@+id/widget_button_label"
+        android:layout_width="match_parent"
+        android:layout_height="36dp"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/ctdp_btn_bg"
+        android:gravity="center"
+        android:text="预约"
+        android:textColor="#FFFFFF"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/widget_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="15m 后启动首任务"
+        android:textColor="#9E9E9E"
+        android:textSize="10sp" />
+
+</LinearLayout>

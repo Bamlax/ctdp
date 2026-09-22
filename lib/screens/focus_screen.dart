@@ -25,6 +25,7 @@ class FocusScreen extends StatefulWidget {
 class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
   Timer? _timer;
   bool _hasAlertedFinished = false;
+  bool _hasAlertedPauseExceeded = false;
 
   CtdpController get controller => widget.controller;
   CtdpTask? get task => controller.taskById(widget.taskId);
@@ -53,13 +54,35 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
     await controller.syncRuntime();
     if (!mounted) return;
 
+    final currentTask = task;
+    if (currentTask == null) {
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+      }
+      return;
+    }
+
     final session = controller.activeSession;
-    if (session != null &&
-        session.taskId == widget.taskId &&
-        session.isFinished &&
-        !_hasAlertedFinished) {
-      _hasAlertedFinished = true;
-      _triggerFeedback();
+    if (session != null && session.taskId == widget.taskId) {
+      if (session.isFinished && !_hasAlertedFinished) {
+        _hasAlertedFinished = true;
+        _triggerFeedback();
+      }
+
+      if (session.isPaused &&
+          session.isPauseExceeded(currentTask.maxPauseMinutes)) {
+        if (!_hasAlertedPauseExceeded) {
+          _hasAlertedPauseExceeded = true;
+          _triggerFeedback();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: CtdpColors.danger,
+              duration: const Duration(seconds: 4),
+              content: Text('⚠️ 已超过允许的最大暂停时长（${currentTask.maxPauseMinutes}分钟），请尽快继续专注！'),
+            ),
+          );
+        }
+      }
     }
 
     setState(() {});
@@ -96,8 +119,19 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _startTask({bool bypassReservation = false}) async {
+    final currentTask = task;
+    if (currentTask == null) return;
+    if (currentTask.isCompleted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('该任务已圆满完成，不可再次执行。')),
+      );
+      return;
+    }
+
     try {
       _hasAlertedFinished = false;
+      _hasAlertedPauseExceeded = false;
+      // 启动任务时不触发任何声音，仅启动计时与静音流体云胶囊
       await controller.startTask(widget.taskId, bypassReservation: bypassReservation);
       if (!mounted) return;
       setState(() {});
@@ -109,18 +143,24 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
 
   Future<void> _completeTask() async {
     final currentTask = task;
-    if (currentTask == null) return;
+    if (currentTask == null || currentTask.isCompleted) return;
 
     final currentNum = controller.getTaskNumber(currentTask);
 
-    _triggerFeedback();
+    // 彻底去除结束任务时的铃声，仅保留轻触震动反馈
+    if (controller.settings.enableVibration) {
+      HapticFeedback.mediumImpact();
+    }
+
     await controller.completeTask(currentTask.id);
     if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('第 #$currentNum 次专注完成！已落块记录。')),
     );
-    Navigator.of(context).pop();
+
+    // 完成后直接一步返回根页面
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   Future<void> _showFailDialog() async {
@@ -181,14 +221,23 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('已中断。后续任务将重置从 #1 重新开始。')),
     );
-    Navigator.of(context).pop();
+
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   @override
   Widget build(BuildContext context) {
     final currentTask = task;
     if (currentTask == null) {
-      return const Scaffold(body: Center(child: Text('任务不存在')));
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      });
+      return const Scaffold(
+        backgroundColor: CtdpColors.background,
+        body: SizedBox.shrink(),
+      );
     }
 
     final session = controller.activeSession;
@@ -207,7 +256,7 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
             onPressed: (activeTaskSession != null || activeTaskReservation != null)
                 ? null
                 : () async {
-                    await Navigator.of(context).push(
+                    final res = await Navigator.of(context).push(
                       MaterialPageRoute(
                         builder: (_) => TaskEditScreen(
                           controller: controller,
@@ -216,6 +265,10 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
                       ),
                     );
                     if (!mounted) return;
+                    if (res == 'deleted' || controller.taskById(widget.taskId) == null) {
+                      Navigator.of(context).pop();
+                      return;
+                    }
                     setState(() {});
                   },
             icon: const Icon(Icons.edit_outlined),
@@ -274,9 +327,9 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
             if (activeTaskReservation != null)
               _buildReservation(activeTaskReservation)
             else if (activeTaskSession != null)
-              _buildTimer(activeTaskSession)
+              _buildTimer(activeTaskSession, currentTask)
             else
-              _buildIdle(currentTask),
+              _buildIdle(currentTask, taskNum),
             const SizedBox(height: 24),
             _buildInfoCard(currentTask, taskNum),
           ],
@@ -285,7 +338,7 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildIdle(CtdpTask currentTask) {
+  Widget _buildIdle(CtdpTask currentTask, int taskNum) {
     final disabledByOther =
         (controller.hasActiveSession && controller.activeSession?.taskId != currentTask.id) ||
         (controller.hasActiveReservation && controller.activeReservation?.taskId != currentTask.id);
@@ -304,7 +357,7 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
               Icon(
                 currentTask.timerMode == TaskTimerMode.countDown
                     ? Icons.timer_outlined
-                    : Icons.timer_10_outlined,
+                    : Icons.timelapse_outlined,
                 size: 48,
                 color: CtdpColors.primary,
               ),
@@ -326,22 +379,50 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
           ),
         ),
         const SizedBox(height: 20),
-        SizedBox(
-          width: double.infinity,
-          height: 48,
-          child: FilledButton.icon(
-            onPressed: disabledByOther ? null : () => _startTask(),
-            icon: const Icon(Icons.play_arrow),
-            label: Text(currentTask.isCompleted ? '再次启动此任务' : '进入神圣座位 (开始任务)'),
+
+        if (currentTask.isCompleted) ...[
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.green.shade50,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: Colors.green.shade300),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.check_circle, color: CtdpColors.success, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  '该任务已完成（#$taskNum 环），不可再次执行',
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    color: CtdpColors.success,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        if (disabledByOther) ...[
-          const SizedBox(height: 12),
-          const Text(
-            '当前已有其他任务正在执行或预约。',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: CtdpColors.textSecondary),
+        ] else ...[
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: FilledButton.icon(
+              onPressed: disabledByOther ? null : () => _startTask(),
+              icon: const Icon(Icons.play_arrow),
+              label: const Text('进入神圣座位 (开始任务)'),
+            ),
           ),
+          if (disabledByOther) ...[
+            const SizedBox(height: 12),
+            const Text(
+              '当前已有其他任务正在执行或预约。',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: CtdpColors.textSecondary),
+            ),
+          ],
         ],
       ],
     );
@@ -405,64 +486,144 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
     );
   }
 
-  Widget _buildTimer(CtdpSession session) {
+  Widget _buildTimer(CtdpSession session, CtdpTask currentTask) {
     final isCountDown = session.timerMode == TaskTimerMode.countDown;
     final seconds = isCountDown ? session.remainingSeconds() : session.elapsedSeconds();
     final finished = isCountDown && session.isFinished;
     final overtime = isCountDown ? session.overtimeSeconds() : 0;
+    final isPauseExceeded = session.isPauseExceeded(currentTask.maxPauseMinutes);
+
+    Color timerColor = CtdpColors.primaryDark;
+    if (finished) {
+      timerColor = CtdpColors.success;
+    } else if (session.isPaused) {
+      timerColor = isPauseExceeded ? CtdpColors.danger : Colors.orange.shade800;
+    }
+
+    String statusText = '保持专注，决不玷污神圣座位';
+    if (session.isPaused) {
+      final pauseSec = session.currentPauseSeconds();
+      if (currentTask.maxPauseMinutes > 0) {
+        statusText = isPauseExceeded
+            ? '已超时暂停 ${_formatDuration(pauseSec)} (限时 ${currentTask.maxPauseMinutes}m)'
+            : '已暂停 ${_formatDuration(pauseSec)} (限时 ${currentTask.maxPauseMinutes}m)';
+      } else {
+        statusText = '已暂停 ${_formatDuration(pauseSec)} (不限时长)';
+      }
+    } else if (finished) {
+      statusText = overtime > 0 ? '已超时 ${_formatDuration(overtime)} (继续专注中)' : '专注时间已达成！';
+    }
 
     return Column(
       children: [
         Text(
-          isCountDown ? '神圣座位倒计时' : '正计时专注中',
-          style: const TextStyle(fontWeight: FontWeight.w700, color: CtdpColors.primary),
+          session.isPaused
+              ? '专注已暂停'
+              : (isCountDown ? '神圣座位倒计时' : '正计时专注中'),
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: session.isPaused ? Colors.orange.shade800 : CtdpColors.primary,
+          ),
         ),
         const SizedBox(height: 12),
         Container(
           width: double.infinity,
           padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 20),
           decoration: BoxDecoration(
-            color: CtdpColors.primaryLight,
+            color: session.isPaused
+                ? (isPauseExceeded ? Colors.red.shade50 : Colors.orange.shade50)
+                : CtdpColors.primaryLight,
             borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: session.isPaused
+                  ? (isPauseExceeded ? CtdpColors.danger : Colors.orange.shade300)
+                  : Colors.transparent,
+              width: 1.5,
+            ),
           ),
           child: Column(
             children: [
               Text(
                 _formatDuration(finished ? overtime : seconds),
                 style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                  color: finished ? CtdpColors.success : CtdpColors.primaryDark,
+                  color: timerColor,
                   fontWeight: FontWeight.w800,
                   letterSpacing: 2,
                 ),
               ),
               const SizedBox(height: 10),
               Text(
-                finished
-                    ? (overtime > 0 ? '已超时 ${_formatDuration(overtime)} (继续专注中)' : '专注时间已达成！')
-                    : '保持专注，决不玷污神圣座位',
+                statusText,
+                style: TextStyle(
+                  color: isPauseExceeded ? CtdpColors.danger : CtdpColors.textPrimary,
+                  fontWeight: isPauseExceeded ? FontWeight.w700 : FontWeight.normal,
+                ),
               ),
             ],
           ),
         ),
         const SizedBox(height: 18),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _showFailDialog,
-                child: const Text('未完成 (重置链)'),
+
+        if (currentTask.allowPause)
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: OutlinedButton(
+                  onPressed: _showFailDialog,
+                  child: const Text('未完成'),
+                ),
               ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: _completeTask,
-                icon: const Icon(Icons.check, size: 18),
-                label: const Text('完成任务'),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 4,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: session.isPaused ? Colors.orange.shade900 : CtdpColors.primary,
+                  ),
+                  onPressed: () async {
+                    if (session.isPaused) {
+                      _hasAlertedPauseExceeded = false;
+                      await controller.resumeSession();
+                    } else {
+                      await controller.pauseSession();
+                    }
+                    setState(() {});
+                  },
+                  icon: Icon(session.isPaused ? Icons.play_arrow : Icons.pause, size: 18),
+                  label: Text(session.isPaused ? '继续专注' : '中途暂停'),
+                ),
               ),
-            ),
-          ],
-        ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 3,
+                child: FilledButton.icon(
+                  onPressed: _completeTask,
+                  icon: const Icon(Icons.check, size: 18),
+                  label: const Text('完成'),
+                ),
+              ),
+            ],
+          )
+        else
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _showFailDialog,
+                  child: const Text('未完成 (重置链)'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _completeTask,
+                  icon: const Icon(Icons.check, size: 18),
+                  label: const Text('完成任务'),
+                ),
+              ),
+            ],
+          ),
       ],
     );
   }
@@ -489,6 +650,9 @@ class _FocusScreenState extends State<FocusScreen> with WidgetsBindingObserver {
                 ? '模式：倒计时 (${currentTask.durationSeconds ~/ 60} 分钟)'
                 : '模式：正计时'),
             Text('预约设定：${currentTask.appointmentMinutes} 分钟'),
+            Text(currentTask.allowPause
+                ? '暂停许可：允许 (${currentTask.maxPauseMinutes > 0 ? "限时 ${currentTask.maxPauseMinutes} 分钟" : "不限时长"})'
+                : '暂停许可：禁止暂停'),
             Text(currentTask.isCompleted
                 ? '已落块编号：#$taskNum'
                 : '当前目标编号：#$taskNum (未完成将重回 #1)'),

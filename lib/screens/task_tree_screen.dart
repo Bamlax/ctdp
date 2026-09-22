@@ -212,10 +212,10 @@ class TaskTreeScreen extends StatelessWidget {
   }
 
   // ============================================================
-  // 静态节点：已完成、中断失败的链条（展示标签与备注）
+  // 静态节点：已完成、中断失败的链条（8px 微缩进）
   // ============================================================
 
-  Widget _buildStaticHistoricalTask(BuildContext context, CtdpTask task, int depth) {
+  Widget _buildStaticHistoricalTask(BuildContext context, CtdpTask task) {
     final isFailed = task.isFailed;
     final taskNum = controller.getTaskNumber(task);
     final canConcludeChain = controller.isLastCompletedTaskOfChain(task);
@@ -228,7 +228,7 @@ class TaskTreeScreen extends StatelessWidget {
 
     return Padding(
       key: ValueKey('static_task_${task.id}'),
-      padding: EdgeInsets.only(left: depth * 14, bottom: 2),
+      padding: const EdgeInsets.only(left: 8, bottom: 2), // 紧凑微缩进 8px
       child: Card(
         elevation: 0,
         margin: const EdgeInsets.symmetric(vertical: 2),
@@ -241,7 +241,7 @@ class TaskTreeScreen extends StatelessWidget {
         child: ListTile(
           dense: true,
           visualDensity: VisualDensity.compact,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
           title: Row(
             children: [
               Expanded(
@@ -328,10 +328,10 @@ class TaskTreeScreen extends StatelessWidget {
   }
 
   // ============================================================
-  // 动态待办节点：支持长按拖动（展示标签与备注）
+  // 动态待办节点：支持长按拖动（8px 微缩进）
   // ============================================================
 
-  Widget _buildMovablePendingTask(BuildContext context, CtdpTask task, int depth, int indexInFolder) {
+  Widget _buildMovablePendingTask(BuildContext context, CtdpTask task, int indexInFolder) {
     final taskNum = controller.getTaskNumber(task);
 
     final cardContent = Card(
@@ -344,7 +344,7 @@ class TaskTreeScreen extends StatelessWidget {
       child: ListTile(
         dense: true,
         visualDensity: VisualDensity.compact,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
         title: Row(
           children: [
             Expanded(
@@ -420,7 +420,7 @@ class TaskTreeScreen extends StatelessWidget {
         final isHovered = candidateData.isNotEmpty;
 
         return Padding(
-          padding: EdgeInsets.only(left: depth * 14, bottom: 2),
+          padding: const EdgeInsets.only(left: 8, bottom: 2), // 紧凑微缩进 8px
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -453,7 +453,7 @@ class TaskTreeScreen extends StatelessWidget {
   }
 
   // ============================================================
-  // 文件夹卡片：作为跨文件夹快速接收容器
+  // 文件夹卡片：子文件夹相对父级微缩进 8px
   // ============================================================
 
   Widget _buildFolder(BuildContext context, CtdpFolder folder, int depth) {
@@ -465,7 +465,8 @@ class TaskTreeScreen extends StatelessWidget {
     final pendingTasks = tasks.where((t) => t.isPending).toList();
 
     return Padding(
-      padding: EdgeInsets.only(left: depth * 10),
+      // 根目录无缩进，子文件夹相对父级仅缩进 8px，杜绝指数叠加
+      padding: EdgeInsets.only(left: depth == 0 ? 0 : 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -496,7 +497,7 @@ class TaskTreeScreen extends StatelessWidget {
                 child: ListTile(
                   dense: true,
                   visualDensity: VisualDensity.compact,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 0),
                   title: Text(
                     '$prefix ${folder.name}',
                     style: const TextStyle(
@@ -541,16 +542,17 @@ class TaskTreeScreen extends StatelessWidget {
             },
           ),
 
-          // 1. 历史链条任务（带标签与备注）
-          ...historicalTasks.map((t) => _buildStaticHistoricalTask(context, t, depth + 1)),
+          // 1. 历史链条任务（微缩进 8px）
+          ...historicalTasks.map((t) => _buildStaticHistoricalTask(context, t)),
 
-          // 2. 未完成待办任务（带标签与备注，支持跨文件夹长按穿梭）
+          // 2. 未完成待办任务（微缩进 8px）
           ...List.generate(pendingTasks.length, (i) {
             final t = pendingTasks[i];
             final realIndex = historicalTasks.length + i;
-            return _buildMovablePendingTask(context, t, depth + 1, realIndex);
+            return _buildMovablePendingTask(context, t, realIndex);
           }),
 
+          // 3. 递归子文件夹（相对父级缩进 8px）
           ...children.map((child) => _buildFolder(context, child, depth + 1)),
         ],
       ),

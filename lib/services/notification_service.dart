@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:timezone/data/latest_all.dart' as tz;
@@ -8,11 +8,13 @@ import '../models/ctdp_state.dart';
 
 class NotificationService {
   static const int reservationReminderId = 1001;
-  static const int ongoingStatusNotificationId = 1002;
+  static const int fluidCloudNotificationId = 1002;
 
-  final FlutterLocalNotificationsPlugin _plugin =
-      FlutterLocalNotificationsPlugin();
+  // 使用全新 V5 最高等级静音渠道，彻底破除 ColorOS 旧渠道缓存
+  static const String fluidCloudChannelId = 'ctdp_fluid_cloud_capsule_v5';
+  static const String reminderChannelId = 'ctdp_reminder_channel_v3';
 
+  final FlutterLocalNotificationsPlugin _plugin = FlutterLocalNotificationsPlugin();
   bool _initialized = false;
 
   void Function(String taskId)? onNotificationSelected;
@@ -20,20 +22,18 @@ class NotificationService {
   Future<void> initialize() async {
     if (_initialized) return;
 
-    // 1. 初始化时区数据，加入异常降级保证不会阻塞后续逻辑
     try {
       tz.initializeTimeZones();
       try {
         final timezoneInfo = await FlutterTimezone.getLocalTimezone();
         tz.setLocalLocation(tz.getLocation(timezoneInfo.identifier));
-      } catch (e) {
+      } catch (_) {
         tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
       }
     } catch (e) {
       debugPrint('Timezone init warning: $e');
     }
 
-    // 2. 正确指定 @mipmap/ic_launcher 图标
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
     const settings = InitializationSettings(android: androidSettings);
 
@@ -47,6 +47,15 @@ class NotificationService {
           }
         },
       );
+
+      final android = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      // 清理旧版历史低权限渠道
+      await android?.deleteNotificationChannel(channelId: 'ctdp_status_channel_v3');
+      await android?.deleteNotificationChannel(channelId: 'ctdp_status_channel_v4');
+      await android?.deleteNotificationChannel(channelId: 'ctdp_fluid_cloud_capsule_v1');
+      await android?.deleteNotificationChannel(channelId: 'ctdp_fluid_cloud_silent_v2');
+
       _initialized = true;
     } catch (e) {
       debugPrint('NotificationService init error: $e');
@@ -67,7 +76,6 @@ class NotificationService {
 
   Future<bool> requestPermission() async {
     if (!_initialized) await initialize();
-
     final android = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     final result = await android?.requestNotificationsPermission();
@@ -75,55 +83,9 @@ class NotificationService {
   }
 
   // ============================================================
-  // 常驻通知栏：专注执行进度 (使用原生 Chronometer 自动刷新)
+  // 1. OPPO 流体云胶囊：预约倒计时态
   // ============================================================
-
-  Future<void> showActiveSessionNotification({
-    required String taskId,
-    required String taskTitle,
-    required TaskTimerMode timerMode,
-    required DateTime startedAt,
-    required int durationSeconds,
-  }) async {
-    if (!_initialized) await initialize();
-    if (!_initialized) return;
-
-    final isCountdown = timerMode == TaskTimerMode.countDown;
-    final whenEpoch = isCountdown
-        ? startedAt.add(Duration(seconds: durationSeconds)).millisecondsSinceEpoch
-        : startedAt.millisecondsSinceEpoch;
-
-    // 此处不能使用 const，因为 whenEpoch 与 isCountdown 为运行时动态计算值
-    final androidDetails = AndroidNotificationDetails(
-      'ctdp_status_channel_v3',
-      'CTDP 专注与预约状态',
-      channelDescription: '显示当前正在进行的专注或预约倒计时状态',
-      importance: Importance.defaultImportance,
-      priority: Priority.high,
-      ongoing: true,
-      autoCancel: false,
-      onlyAlertOnce: true,
-      showWhen: true,
-      when: whenEpoch,
-      icon: '@mipmap/ic_launcher',
-      usesChronometer: true,
-      chronometerCountDown: isCountdown,
-    );
-
-    await _plugin.show(
-      id: ongoingStatusNotificationId,
-      title: '神圣座位专注中: $taskTitle',
-      body: isCountdown ? '倒计时专注中，点击返回应用' : '正计时进行中，点击返回应用',
-      notificationDetails: NotificationDetails(android: androidDetails),
-      payload: taskId,
-    );
-  }
-
-  // ============================================================
-  // 常驻通知栏：辅助链预约进度
-  // ============================================================
-
-  Future<void> showActiveReservationNotification({
+  Future<void> showReservationCapsule({
     required String taskId,
     required String taskTitle,
     required DateTime deadline,
@@ -131,40 +93,197 @@ class NotificationService {
     if (!_initialized) await initialize();
     if (!_initialized) return;
 
+    final targetTimeStr =
+        '${deadline.hour.toString().padLeft(2, '0')}:${deadline.minute.toString().padLeft(2, '0')}';
+
     final androidDetails = AndroidNotificationDetails(
-      'ctdp_status_channel_v3',
-      'CTDP 专注与预约状态',
-      channelDescription: '显示当前正在进行的专注或预约倒计时状态',
-      importance: Importance.defaultImportance,
-      priority: Priority.high,
+      fluidCloudChannelId,
+      'CTDP 实时流体云胶囊',
+      channelDescription: '适配 OPPO ColorOS 状态栏胶囊与锁屏实时活动',
+      importance: Importance.max, // 关键：ColorOS 流体云胶囊必须要求 MAX/HIGH 级别
+      priority: Priority.max,
+      playSound: false,
+      enableVibration: false,
+      sound: null,
       ongoing: true,
       autoCancel: false,
       onlyAlertOnce: true,
       showWhen: true,
       when: deadline.millisecondsSinceEpoch,
-      icon: '@mipmap/ic_launcher',
       usesChronometer: true,
       chronometerCountDown: true,
+      category: AndroidNotificationCategory.alarm,
+      subText: '预约中', // 胶囊状态栏紧凑文本
+      ticker: '预约中',
+      color: const Color(0xFF1976D2),
+      visibility: NotificationVisibility.public,
+      icon: '@mipmap/ic_launcher',
     );
 
     await _plugin.show(
-      id: ongoingStatusNotificationId,
-      title: '预约准备缓冲中: $taskTitle',
-      body: '预约倒计时结束后将自动进入专注任务',
+      id: fluidCloudNotificationId,
+      title: '预约中: $taskTitle',
+      body: '将于 $targetTimeStr 自动进入专注',
       notificationDetails: NotificationDetails(android: androidDetails),
       payload: taskId,
     );
   }
 
-  Future<void> cancelActiveStatusNotification() async {
+  // ============================================================
+  // 2. OPPO 流体云胶囊：执行态（倒计时 / 正计时）
+  // ============================================================
+  Future<void> showFocusSessionCapsule({
+    required String taskId,
+    required String taskTitle,
+    required TaskTimerMode timerMode,
+    required DateTime startedAt,
+    required int durationSeconds,
+    required int totalPausedSeconds,
+  }) async {
+    if (!_initialized) await initialize();
     if (!_initialized) return;
-    await _plugin.cancel(id: ongoingStatusNotificationId);
+
+    final isCountdown = timerMode == TaskTimerMode.countDown;
+    int whenEpoch;
+
+    if (isCountdown) {
+      // 倒计时截止点 = 开始时间 + 计划时长 + 累计暂停补偿
+      whenEpoch = startedAt
+          .add(Duration(seconds: durationSeconds + totalPausedSeconds))
+          .millisecondsSinceEpoch;
+    } else {
+      // 正计时基准点
+      whenEpoch = startedAt
+          .add(Duration(seconds: totalPausedSeconds))
+          .millisecondsSinceEpoch;
+    }
+
+    final androidDetails = AndroidNotificationDetails(
+      fluidCloudChannelId,
+      'CTDP 实时流体云胶囊',
+      channelDescription: '适配 OPPO ColorOS 状态栏胶囊与锁屏实时活动',
+      importance: Importance.max,
+      priority: Priority.max,
+      playSound: false,
+      enableVibration: false,
+      sound: null,
+      ongoing: true,
+      autoCancel: false,
+      onlyAlertOnce: true,
+      showWhen: true,
+      when: whenEpoch,
+      usesChronometer: true,
+      chronometerCountDown: isCountdown,
+      category: AndroidNotificationCategory.stopwatch,
+      subText: isCountdown ? '专注中' : '正计时',
+      ticker: isCountdown ? '专注中' : '正计时',
+      color: const Color(0xFF1976D2),
+      visibility: NotificationVisibility.public,
+      icon: '@mipmap/ic_launcher',
+    );
+
+    await _plugin.show(
+      id: fluidCloudNotificationId,
+      title: '专注中: $taskTitle',
+      body: isCountdown ? '保持专注，决不玷污神圣座位' : '正计时进行中',
+      notificationDetails: NotificationDetails(android: androidDetails),
+      payload: taskId,
+    );
   }
 
   // ============================================================
-  // 定时强提醒通知：预约时间已到
+  // 3. OPPO 流体云胶囊：暂停态（停止 Chronometer，胶囊显示“已暂停”）
   // ============================================================
+  Future<void> showPausedCapsule({
+    required String taskId,
+    required String taskTitle,
+  }) async {
+    if (!_initialized) await initialize();
+    if (!_initialized) return;
 
+    final androidDetails = const AndroidNotificationDetails(
+      fluidCloudChannelId,
+      'CTDP 实时流体云胶囊',
+      channelDescription: '适配 OPPO ColorOS 状态栏胶囊与锁屏实时活动',
+      importance: Importance.max,
+      priority: Priority.max,
+      playSound: false,
+      enableVibration: false,
+      sound: null,
+      ongoing: true,
+      autoCancel: false,
+      onlyAlertOnce: true,
+      showWhen: false,
+      usesChronometer: false, // 暂停时必须关闭计时跳动
+      category: AndroidNotificationCategory.stopwatch,
+      subText: '已暂停', // ColorOS 胶囊右侧文本槽（B*）强制映射此内容
+      ticker: '已暂停',
+      color: Color(0xFFEF6C00), // 暂停警示橙
+      visibility: NotificationVisibility.public,
+      icon: '@mipmap/ic_launcher',
+    );
+
+    await _plugin.show(
+      id: fluidCloudNotificationId,
+      title: '已暂停: $taskTitle',
+      body: '专注已暂停 · 点击返回继续',
+      notificationDetails: NotificationDetails(android: androidDetails),
+      payload: taskId,
+    );
+  }
+
+  // ============================================================
+  // 4. OPPO 流体云胶囊：超时态（正向递增显示超时时长）
+  // ============================================================
+  Future<void> showOvertimeCapsule({
+    required String taskId,
+    required String taskTitle,
+    required DateTime plannedEndTime,
+  }) async {
+    if (!_initialized) await initialize();
+    if (!_initialized) return;
+
+    final androidDetails = AndroidNotificationDetails(
+      fluidCloudChannelId,
+      'CTDP 实时流体云胶囊',
+      channelDescription: '适配 OPPO ColorOS 状态栏胶囊与锁屏实时活动',
+      importance: Importance.max,
+      priority: Priority.max,
+      playSound: false,
+      enableVibration: false,
+      sound: null,
+      ongoing: true,
+      autoCancel: false,
+      onlyAlertOnce: true,
+      showWhen: true,
+      when: plannedEndTime.millisecondsSinceEpoch,
+      usesChronometer: true,
+      chronometerCountDown: false, // 超时后作为正计时递增
+      category: AndroidNotificationCategory.stopwatch,
+      subText: '已超时',
+      ticker: '已超时',
+      color: const Color(0xFFC62828), // 警戒红
+      visibility: NotificationVisibility.public,
+      icon: '@mipmap/ic_launcher',
+    );
+
+    await _plugin.show(
+      id: fluidCloudNotificationId,
+      title: '⚠️ 已超时: $taskTitle',
+      body: '专注时长已达成，正在记录超时投入',
+      notificationDetails: NotificationDetails(android: androidDetails),
+      payload: taskId,
+    );
+  }
+
+  Future<void> cancelFluidCloudCapsule() async {
+    if (!_initialized) return;
+    await _plugin.cancel(id: fluidCloudNotificationId);
+  }
+
+  // ============================================================
+  // 定时到期系统强提醒
+  // ============================================================
   Future<void> scheduleReservation({
     required DateTime deadline,
     required String taskName,
@@ -174,12 +293,11 @@ class NotificationService {
     if (!_initialized) return;
 
     await cancelReservationReminder();
-
     final scheduledDate = tz.TZDateTime.from(deadline, tz.local);
 
     const notificationDetails = NotificationDetails(
       android: AndroidNotificationDetails(
-        'ctdp_reminder_channel_v3',
+        reminderChannelId,
         'CTDP 到期提醒',
         channelDescription: '预约与专注时间到达时的系统提示',
         importance: Importance.high,

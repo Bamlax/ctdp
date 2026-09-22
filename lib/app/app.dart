@@ -9,10 +9,6 @@ import '../screens/settings_screen.dart';
 import '../screens/task_tree_screen.dart';
 import '../services/ctdp_engine.dart';
 
-// ============================================================
-// 主题与配色
-// ============================================================
-
 class CtdpColors {
   static const primary = Color(0xFF1976D2);
   static const primaryDark = Color(0xFF0D47A1);
@@ -86,10 +82,6 @@ class CtdpTheme {
   }
 }
 
-// ============================================================
-// 应用根组件
-// ============================================================
-
 class CtdpApp extends StatefulWidget {
   const CtdpApp({super.key});
 
@@ -110,26 +102,21 @@ class _CtdpAppState extends State<CtdpApp> {
   }
 
   Future<void> _initAppAndWidgetListeners() async {
-    // 1. 通知点击监听
     _controller.notifications.onNotificationSelected = (taskId) {
       _navigateToTask(taskId);
     };
 
     await _controller.initialize();
 
-    // 2. 监听应用在后台/前台运行时点击桌面小组件
     _widgetSub = HomeWidget.widgetClicked.listen(_handleWidgetUri);
 
-    // 3. 检查应用完全关闭（冷启动）时点击桌面小组件或通知
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      // 检查小组件冷启动
       final initialWidgetUri = await HomeWidget.initiallyLaunchedFromHomeWidget();
       if (initialWidgetUri != null) {
         _handleWidgetUri(initialWidgetUri);
         return;
       }
 
-      // 检查通知栏冷启动
       final initialTaskId = await _controller.notifications.getInitialPayload();
       if (initialTaskId != null) {
         _navigateToTask(initialTaskId);
@@ -137,10 +124,9 @@ class _CtdpAppState extends State<CtdpApp> {
     });
   }
 
-void _handleWidgetUri(Uri? uri) async {
+  void _handleWidgetUri(Uri? uri) async {
     if (uri != null && uri.toString().contains('quick_reservation')) {
       try {
-        // 1. 获取首个未完成任务
         final firstTask = _controller.getFirstPendingTask();
         if (firstTask == null) {
           final context = _navigatorKey.currentContext;
@@ -152,10 +138,8 @@ void _handleWidgetUri(Uri? uri) async {
           return;
         }
 
-        // 2. 启动该任务的预约（若设置了时延则进入预约倒计时，若为0则直接进入正/倒计时）
-        await _controller.startTask(firstTask.id);
-
-        // 3. 立即自动跳转并显示倒计时/预约计时界面
+        // 关键修复：点击桌面小组件的“预约”时，严格启动快速预约缓冲，绝不跳过直接进入正计时
+        await _controller.startQuickReservationForFirstTask();
         _navigateToTask(firstTask.id);
       } catch (e) {
         final context = _navigatorKey.currentContext;
@@ -171,6 +155,8 @@ void _handleWidgetUri(Uri? uri) async {
   void _navigateToTask(String taskId) {
     if (_controller.taskById(taskId) == null) return;
 
+    // 关键修复：清除旧的堆叠页面，直接推入唯一的 FocusScreen，杜绝多层返回问题
+    _navigatorKey.currentState?.popUntil((route) => route.isFirst);
     _navigatorKey.currentState?.push(
       MaterialPageRoute(
         builder: (_) => FocusScreen(

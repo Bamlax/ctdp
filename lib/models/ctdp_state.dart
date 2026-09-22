@@ -3,10 +3,9 @@ enum TaskTimerMode {
   countDown,
 }
 
-TaskTimerMode taskTimerModeFromJson(String? value) {
-  return value == 'countDown'
-      ? TaskTimerMode.countDown
-      : TaskTimerMode.countUp;
+TaskTimerMode taskTimerModeFromJson(String? value, [TaskTimerMode fallback = TaskTimerMode.countDown]) {
+  if (value == null) return fallback;
+  return value == 'countUp' ? TaskTimerMode.countUp : TaskTimerMode.countDown;
 }
 
 class CtdpFolderOption {
@@ -64,6 +63,7 @@ class CtdpFailureRecord {
 class CtdpSettings {
   final int defaultDurationMinutes;
   final int defaultAppointmentMinutes;
+  final TaskTimerMode defaultTimerMode; // 新增：默认计时模式（正计时/倒计时）
   final bool enableVibration;
   final bool enableSound;
   final List<String> unitTypes;
@@ -71,6 +71,7 @@ class CtdpSettings {
   const CtdpSettings({
     required this.defaultDurationMinutes,
     required this.defaultAppointmentMinutes,
+    this.defaultTimerMode = TaskTimerMode.countDown,
     required this.enableVibration,
     required this.enableSound,
     required this.unitTypes,
@@ -80,6 +81,7 @@ class CtdpSettings {
     return const CtdpSettings(
       defaultDurationMinutes: 60,
       defaultAppointmentMinutes: 15,
+      defaultTimerMode: TaskTimerMode.countDown,
       enableVibration: true,
       enableSound: true,
       unitTypes: ['学习', '工作', '阅读', '运动', '日常'],
@@ -89,6 +91,7 @@ class CtdpSettings {
   CtdpSettings copyWith({
     int? defaultDurationMinutes,
     int? defaultAppointmentMinutes,
+    TaskTimerMode? defaultTimerMode,
     bool? enableVibration,
     bool? enableSound,
     List<String>? unitTypes,
@@ -98,6 +101,7 @@ class CtdpSettings {
           defaultDurationMinutes ?? this.defaultDurationMinutes,
       defaultAppointmentMinutes:
           defaultAppointmentMinutes ?? this.defaultAppointmentMinutes,
+      defaultTimerMode: defaultTimerMode ?? this.defaultTimerMode,
       enableVibration: enableVibration ?? this.enableVibration,
       enableSound: enableSound ?? this.enableSound,
       unitTypes: unitTypes ?? this.unitTypes,
@@ -108,6 +112,7 @@ class CtdpSettings {
     return {
       'defaultDurationMinutes': defaultDurationMinutes,
       'defaultAppointmentMinutes': defaultAppointmentMinutes,
+      'defaultTimerMode': defaultTimerMode.name,
       'enableVibration': enableVibration,
       'enableSound': enableSound,
       'unitTypes': unitTypes,
@@ -122,6 +127,10 @@ class CtdpSettings {
       defaultDurationMinutes: json['defaultDurationMinutes'] as int? ?? 60,
       defaultAppointmentMinutes:
           json['defaultAppointmentMinutes'] as int? ?? 15,
+      defaultTimerMode: taskTimerModeFromJson(
+        json['defaultTimerMode'] as String?,
+        TaskTimerMode.countDown,
+      ),
       enableVibration: json['enableVibration'] as bool? ?? true,
       enableSound: json['enableSound'] as bool? ?? true,
       unitTypes: rawTypes != null
@@ -188,12 +197,13 @@ class CtdpTask {
   final bool isChainEnd;      // 是否主动完结该链
   final List<String> tags;    // 标签列表
   final String notes;         // 备注文本
+  final bool allowPause;      // 是否允许暂停
+  final int maxPauseMinutes;  // 允许最大暂停时长（0 表示不限）
   final DateTime? failedAt;
   final String? failureReason;
   final DateTime createdAt;
   final DateTime? completedAt;
 
-  // 别名兼容支持 task.note
   String get note => notes;
 
   const CtdpTask({
@@ -209,6 +219,8 @@ class CtdpTask {
     this.isChainEnd = false,
     this.tags = const [],
     this.notes = '',
+    this.allowPause = false,
+    this.maxPauseMinutes = 0,
     this.failedAt,
     this.failureReason,
     required this.createdAt,
@@ -231,6 +243,8 @@ class CtdpTask {
     bool? isChainEnd,
     List<String>? tags,
     String? notes,
+    bool? allowPause,
+    int? maxPauseMinutes,
     DateTime? failedAt,
     String? failureReason,
     DateTime? completedAt,
@@ -253,6 +267,8 @@ class CtdpTask {
       isChainEnd: isChainEnd ?? this.isChainEnd,
       tags: tags ?? this.tags,
       notes: notes ?? this.notes,
+      allowPause: allowPause ?? this.allowPause,
+      maxPauseMinutes: maxPauseMinutes ?? this.maxPauseMinutes,
       failedAt: clearFailedAt ? null : failedAt ?? this.failedAt,
       failureReason: clearFailedAt ? null : failureReason ?? this.failureReason,
       createdAt: createdAt,
@@ -274,6 +290,8 @@ class CtdpTask {
       'isChainEnd': isChainEnd,
       'tags': tags,
       'notes': notes,
+      'allowPause': allowPause,
+      'maxPauseMinutes': maxPauseMinutes,
       'failedAt': failedAt?.toIso8601String(),
       'failureReason': failureReason,
       'createdAt': createdAt.toIso8601String(),
@@ -299,7 +317,7 @@ class CtdpTask {
       id: json['id'] as String,
       title: json['title'] as String,
       folderId: json['folderId'] as String?,
-      timerMode: taskTimerModeFromJson(json['timerMode'] as String?),
+      timerMode: taskTimerModeFromJson(json['timerMode'] as String?, TaskTimerMode.countDown),
       unitType: _parseUnitType(json['unitType']),
       durationSeconds: (json['durationSeconds'] as int?) ?? 0,
       appointmentMinutes: (json['appointmentMinutes'] as int?) ?? 0,
@@ -308,6 +326,8 @@ class CtdpTask {
       isChainEnd: (json['isChainEnd'] as bool?) ?? false,
       tags: rawTags != null ? rawTags.map((e) => e.toString()).toList() : const [],
       notes: (json['notes'] as String?) ?? '',
+      allowPause: (json['allowPause'] as bool?) ?? false,
+      maxPauseMinutes: (json['maxPauseMinutes'] as int?) ?? 0,
       failedAt: json['failedAt'] == null ? null : DateTime.parse(json['failedAt'] as String),
       failureReason: json['failureReason'] as String?,
       createdAt: DateTime.parse(json['createdAt'] as String),
@@ -323,18 +343,46 @@ class CtdpSession {
   final DateTime startedAt;
   final TaskTimerMode timerMode;
   final int durationSeconds;
+  final bool isPaused;
+  final DateTime? pausedAt;
+  final int totalPausedSeconds;
 
   const CtdpSession({
     required this.taskId,
     required this.startedAt,
     required this.timerMode,
     required this.durationSeconds,
+    this.isPaused = false,
+    this.pausedAt,
+    this.totalPausedSeconds = 0,
   });
+
+  CtdpSession copyWith({
+    String? taskId,
+    DateTime? startedAt,
+    TaskTimerMode? timerMode,
+    int? durationSeconds,
+    bool? isPaused,
+    DateTime? pausedAt,
+    bool clearPausedAt = false,
+    int? totalPausedSeconds,
+  }) {
+    return CtdpSession(
+      taskId: taskId ?? this.taskId,
+      startedAt: startedAt ?? this.startedAt,
+      timerMode: timerMode ?? this.timerMode,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      isPaused: isPaused ?? this.isPaused,
+      pausedAt: clearPausedAt ? null : pausedAt ?? this.pausedAt,
+      totalPausedSeconds: totalPausedSeconds ?? this.totalPausedSeconds,
+    );
+  }
 
   int elapsedSeconds([DateTime? now]) {
     final current = now ?? DateTime.now();
-    final seconds = current.difference(startedAt).inSeconds;
-    return seconds < 0 ? 0 : seconds;
+    final refTime = (isPaused && pausedAt != null) ? pausedAt! : current;
+    final raw = refTime.difference(startedAt).inSeconds - totalPausedSeconds;
+    return raw < 0 ? 0 : raw;
   }
 
   int remainingSeconds([DateTime? now]) {
@@ -349,6 +397,18 @@ class CtdpSession {
     return elapsed > durationSeconds ? elapsed - durationSeconds : 0;
   }
 
+  int currentPauseSeconds([DateTime? now]) {
+    if (!isPaused || pausedAt == null) return 0;
+    final current = now ?? DateTime.now();
+    final diff = current.difference(pausedAt!).inSeconds;
+    return diff < 0 ? 0 : diff;
+  }
+
+  bool isPauseExceeded(int maxMinutes, [DateTime? now]) {
+    if (maxMinutes <= 0 || !isPaused || pausedAt == null) return false;
+    return currentPauseSeconds(now) >= maxMinutes * 60;
+  }
+
   bool get isFinished {
     if (timerMode == TaskTimerMode.countUp) return false;
     return elapsedSeconds() >= durationSeconds;
@@ -360,6 +420,9 @@ class CtdpSession {
       'startedAt': startedAt.toIso8601String(),
       'timerMode': timerMode.name,
       'durationSeconds': durationSeconds,
+      'isPaused': isPaused,
+      'pausedAt': pausedAt?.toIso8601String(),
+      'totalPausedSeconds': totalPausedSeconds,
     };
   }
 
@@ -367,8 +430,11 @@ class CtdpSession {
     return CtdpSession(
       taskId: json['taskId'] as String,
       startedAt: DateTime.parse(json['startedAt'] as String),
-      timerMode: taskTimerModeFromJson(json['timerMode'] as String?),
+      timerMode: taskTimerModeFromJson(json['timerMode'] as String?, TaskTimerMode.countDown),
       durationSeconds: (json['durationSeconds'] as int?) ?? 0,
+      isPaused: (json['isPaused'] as bool?) ?? false,
+      pausedAt: json['pausedAt'] == null ? null : DateTime.parse(json['pausedAt'] as String),
+      totalPausedSeconds: (json['totalPausedSeconds'] as int?) ?? 0,
     );
   }
 }
@@ -466,7 +532,7 @@ class CtdpState {
 
   Map<String, dynamic> toJson() {
     return {
-      'version': 10,
+      'version': 11,
       'folders': folders.map((f) => f.toJson()).toList(),
       'tasks': tasks.map((t) => t.toJson()).toList(),
       'failures': failures.map((f) => f.toJson()).toList(),

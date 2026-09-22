@@ -28,11 +28,13 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
   late final TextEditingController _appointmentController;
   late final TextEditingController _tagInputController;
   late final TextEditingController _notesController;
+  late final TextEditingController _maxPauseController;
 
   String? _selectedFolder;
   late TaskTimerMode _timerMode;
   late String _unitType;
   final List<String> _tags = [];
+  bool _allowPause = false;
 
   CtdpTask? get task => widget.taskId == null
       ? null
@@ -57,10 +59,17 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
     );
     _tagInputController = TextEditingController();
     _notesController = TextEditingController(text: currentTask?.notes ?? '');
+    _allowPause = currentTask?.allowPause ?? false;
+    _maxPauseController = TextEditingController(
+      text: currentTask != null && currentTask.maxPauseMinutes > 0
+          ? '${currentTask.maxPauseMinutes}'
+          : '',
+    );
 
-    _timerMode = currentTask?.timerMode ?? TaskTimerMode.countDown;
+    // 适配用户在设置中设定的默认模式（正计时/倒计时）
+    _timerMode = currentTask?.timerMode ?? settings.defaultTimerMode;
     _unitType = currentTask?.unitType ??
-        (settings.unitTypes.isNotEmpty ? settings.unitTypes.first : '综合');
+        (settings.unitTypes.isNotEmpty ? settings.unitTypes.first : '学习');
 
     if (currentTask != null) {
       _tags.addAll(currentTask.tags);
@@ -84,6 +93,7 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
     _appointmentController.dispose();
     _tagInputController.dispose();
     _notesController.dispose();
+    _maxPauseController.dispose();
     super.dispose();
   }
 
@@ -155,6 +165,7 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
     final title = _titleController.text.trim();
     final duration = int.tryParse(_durationController.text.trim()) ?? 0;
     final appointment = int.tryParse(_appointmentController.text.trim()) ?? 0;
+    final maxPause = _allowPause ? (int.tryParse(_maxPauseController.text.trim()) ?? 0) : 0;
 
     if (title.isEmpty) {
       _showError('请输入任务名称。');
@@ -173,6 +184,10 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
       _showError('预约时间不能小于 0。');
       return;
     }
+    if (_allowPause && maxPause < 0) {
+      _showError('允许暂停时长不能小于 0。');
+      return;
+    }
 
     try {
       if (widget.isEditing) {
@@ -186,6 +201,8 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
           appointmentMinutes: appointment,
           tags: _tags,
           notes: _notesController.text.trim(),
+          allowPause: _allowPause,
+          maxPauseMinutes: maxPause,
         );
         if (!mounted) return;
         Navigator.of(context).pop(true);
@@ -199,6 +216,8 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
           appointmentMinutes: appointment,
           tags: _tags,
           notes: _notesController.text.trim(),
+          allowPause: _allowPause,
+          maxPauseMinutes: maxPause,
         );
         if (!mounted) return;
         Navigator.of(context).pop(newId);
@@ -261,7 +280,6 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
     final folders = widget.controller.getFolderOptions();
     final unitTypes = widget.controller.settings.unitTypes;
 
-    // 安全防御：确保选中的文件夹必定有效存在于下拉项中，防止底层断言报错
     final effectiveFolder = folders.any((f) => f.id == _selectedFolder)
         ? _selectedFolder
         : (folders.isNotEmpty ? folders.first.id : null);
@@ -372,7 +390,7 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
                   ButtonSegment<TaskTimerMode>(
                     value: TaskTimerMode.countUp,
                     label: Text('正计时'),
-                    icon: Icon(Icons.timer_10_outlined),
+                    icon: Icon(Icons.timelapse_outlined),
                   ),
                 ],
                 selected: {_timerMode},
@@ -382,7 +400,9 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            if (_timerMode == TaskTimerMode.countDown)
+
+            // 倒计时模式显示输入框，正计时模式无任何冗余文字卡片
+            if (_timerMode == TaskTimerMode.countDown) ...[
               TextField(
                 controller: _durationController,
                 keyboardType: TextInputType.number,
@@ -392,20 +412,10 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
                   border: OutlineInputBorder(),
                   isDense: true,
                 ),
-              )
-            else
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: CtdpColors.primaryLight,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  '正计时模式，完成时记录实际消耗时间。',
-                  style: TextStyle(fontSize: 13, color: CtdpColors.textSecondary),
-                ),
               ),
-            const SizedBox(height: 16),
+              const SizedBox(height: 16),
+            ],
+
             TextField(
               controller: _appointmentController,
               keyboardType: TextInputType.number,
@@ -417,9 +427,33 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
                 isDense: true,
               ),
             ),
+            const SizedBox(height: 12),
+
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('允许专注中途暂停', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+              subtitle: const Text('开启后专注过程中可暂停计时', style: TextStyle(fontSize: 12, color: CtdpColors.textSecondary)),
+              value: _allowPause,
+              onChanged: (val) {
+                setState(() => _allowPause = val);
+              },
+            ),
+            if (_allowPause) ...[
+              const SizedBox(height: 8),
+              TextField(
+                controller: _maxPauseController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: '可暂停时长 (分钟)',
+                  hintText: '留空或 0 为不限制时长',
+                  suffixText: '分钟',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
 
-            // 标签输入框：将添加按钮内嵌为 suffixIcon，从根源上杜绝 Row 布局引发的无限宽崩溃
             TextField(
               controller: _tagInputController,
               decoration: InputDecoration(
@@ -456,7 +490,6 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
             ],
             const SizedBox(height: 16),
 
-            // 备注说明输入框
             TextField(
               controller: _notesController,
               maxLines: 3,
@@ -469,7 +502,6 @@ class _TaskEditScreenState extends State<TaskEditScreen> {
             ),
             const SizedBox(height: 28),
 
-            // 确定与取消：左取消、右确定，均带外框保持原汁原味
             Row(
               children: [
                 Expanded(

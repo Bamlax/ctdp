@@ -3,7 +3,16 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/ctdp_state.dart';
+import 'live_update_service.dart';
 import 'notification_service.dart';
+
+enum _LiveUpdateState {
+  none,
+  reservation,
+  focusing,
+  paused,
+  overtime,
+}
 
 class CtdpController extends ChangeNotifier {
   CtdpController({
@@ -19,6 +28,10 @@ class CtdpController extends ChangeNotifier {
 
   CtdpState _state = CtdpState.initial();
   bool _initialized = false;
+
+  // 实时更新状态守卫，避免每秒高频下发导致系统通知限流
+  _LiveUpdateState _liveUpdateState = _LiveUpdateState.none;
+  String? _liveUpdateTaskId;
 
   bool get initialized => _initialized;
   CtdpState get state => _state;
@@ -494,6 +507,8 @@ class CtdpController extends ChangeNotifier {
     required int appointmentMinutes,
     List<String> tags = const [],
     String notes = '',
+    bool allowPause = false,
+    int maxPauseMinutes = 0,
   }) async {
     final cleanTitle = title.trim();
     if (cleanTitle.isEmpty) return null;
@@ -517,6 +532,8 @@ class CtdpController extends ChangeNotifier {
       isChainEnd: false,
       tags: tags,
       notes: notes.trim(),
+      allowPause: allowPause,
+      maxPauseMinutes: maxPauseMinutes,
       createdAt: DateTime.now(),
       completedAt: null,
     );
@@ -536,6 +553,8 @@ class CtdpController extends ChangeNotifier {
     required int appointmentMinutes,
     List<String> tags = const [],
     String notes = '',
+    bool allowPause = false,
+    int maxPauseMinutes = 0,
   }) async {
     final task = taskById(taskId);
     if (task == null) throw StateError('任务不存在。');
@@ -566,6 +585,8 @@ class CtdpController extends ChangeNotifier {
           appointmentMinutes: appointmentMinutes,
           tags: tags,
           notes: notes.trim(),
+          allowPause: allowPause,
+          maxPauseMinutes: maxPauseMinutes,
         );
       }).toList(),
     );
@@ -582,7 +603,9 @@ class CtdpController extends ChangeNotifier {
 
     if (activeReservation?.taskId == taskId) {
       await _notifications.cancelReservationReminder();
-      await _notifications.cancelActiveStatusNotification();
+      await LiveUpdateService.dismiss();
+      _liveUpdateState = _LiveUpdateState.none;
+      _liveUpdateTaskId = null;
       _state = _state.copyWith(clearActiveReservation: true);
     }
 
@@ -639,7 +662,11 @@ class CtdpController extends ChangeNotifier {
     final task = taskById(taskId);
     if (task == null) throw StateError('找不到该任务。');
 
-    if (task.isCompleted || task.isFailed) {
+    if (task.isCompleted) {
+      throw StateError('该任务已完成，不可再次执行。');
+    }
+
+    if (task.isFailed) {
       _state = _state.copyWith(
         tasks: tasks.map<CtdpTask>((item) {
           return item.id == taskId
@@ -666,6 +693,9 @@ class CtdpController extends ChangeNotifier {
 
     if (hasActiveReservation && bypassReservation) {
       await _notifications.cancelReservationReminder();
+      await LiveUpdateService.dismiss();
+      _liveUpdateState = _LiveUpdateState.none;
+      _liveUpdateTaskId = null;
       _state = _state.copyWith(clearActiveReservation: true);
     }
 
@@ -686,22 +716,93 @@ class CtdpController extends ChangeNotifier {
 
     _state = _state.copyWith(activeSession: session);
     await _persist();
-
     await _notifications.requestPermission();
 
     final taskNumber = getTaskNumber(task);
 
-    try {
-      await _notifications.showActiveSessionNotification(
-        taskId: task.id,
-        taskTitle: '#$taskNumber ${task.title}',
-        timerMode: task.timerMode,
-        startedAt: start,
-        durationSeconds: task.durationSeconds,
+    // 唤起实时更新通知
+    await LiveUpdateService.showFocusing(
+      taskTitle: task.title,
+      timerMode: task.timerMode,
+      startedAt: start,
+      durationSeconds: task.durationSeconds,
+      totalPausedSeconds: 0,
+      taskNum: taskNumber,
+    );
+    _liveUpdateState = _LiveUpdateState.focusing;
+    _liveUpdateTaskId = task.id;
+  }
+
+  Future<void> pauseSession() async {
+    final session = activeSession;
+    if (session == null || session.isPaused) return;
+
+    final now = DateTime.now();
+    _state = _state.copyWith(
+      activeSession: session.copyWith(
+        isPaused: true,
+        pausedAt: now,
+      ),
+    );
+    notifyListeners();
+    await _storage.saveState(_state);
+
+    final task = taskById(session.taskId);
+    if (task != null) {
+      final taskNumber = getTaskNumber(task);
+      // 实时更新通知转入暂停态
+      await LiveUpdateService.showPaused(
+        taskTitle: task.title,
+        taskNum: taskNumber,
       );
-    } catch (e) {
-      debugPrint('Error showing session notification: $e');
+      _liveUpdateState = _LiveUpdateState.paused;
+      _liveUpdateTaskId = task.id;
     }
+  }
+
+  Future<void> resumeSession() async {
+    final session = activeSession;
+    if (session == null || !session.isPaused || session.pausedAt == null) return;
+
+    final additionalPause = DateTime.now().difference(session.pausedAt!).inSeconds;
+    final updatedTotalPaused = session.totalPausedSeconds + (additionalPause > 0 ? additionalPause : 0);
+
+    final newSession = session.copyWith(
+      isPaused: false,
+      clearPausedAt: true,
+      totalPausedSeconds: updatedTotalPaused,
+    );
+
+    _state = _state.copyWith(activeSession: newSession);
+    notifyListeners();
+    await _storage.saveState(_state);
+
+    final task = taskById(newSession.taskId);
+    if (task == null) return;
+
+    final taskNumber = getTaskNumber(task);
+    if (newSession.timerMode == TaskTimerMode.countDown && newSession.isFinished) {
+      final plannedEnd = newSession.startedAt.add(
+        Duration(seconds: newSession.durationSeconds + newSession.totalPausedSeconds),
+      );
+      await LiveUpdateService.showOvertime(
+        taskTitle: task.title,
+        plannedEndTime: plannedEnd,
+        taskNum: taskNumber,
+      );
+      _liveUpdateState = _LiveUpdateState.overtime;
+    } else {
+      await LiveUpdateService.showFocusing(
+        taskTitle: task.title,
+        timerMode: newSession.timerMode,
+        startedAt: newSession.startedAt,
+        durationSeconds: newSession.durationSeconds,
+        totalPausedSeconds: newSession.totalPausedSeconds,
+        taskNum: taskNumber,
+      );
+      _liveUpdateState = _LiveUpdateState.focusing;
+    }
+    _liveUpdateTaskId = task.id;
   }
 
   Future<void> completeTask(String taskId) async {
@@ -741,7 +842,10 @@ class CtdpController extends ChangeNotifier {
       clearActiveSession: true,
     );
 
-    await _notifications.cancelActiveStatusNotification();
+    // 完成任务清除实时更新
+    await LiveUpdateService.dismiss();
+    _liveUpdateState = _LiveUpdateState.none;
+    _liveUpdateTaskId = null;
     await _persist();
   }
 
@@ -776,8 +880,11 @@ class CtdpController extends ChangeNotifier {
       clearActiveReservation: true,
     );
 
-    await _notifications.cancelActiveStatusNotification();
+    // 中断清除实时更新
+    await LiveUpdateService.dismiss();
     await _notifications.cancelReservationReminder();
+    _liveUpdateState = _LiveUpdateState.none;
+    _liveUpdateTaskId = null;
     await _persist();
   }
 
@@ -819,72 +926,100 @@ class CtdpController extends ChangeNotifier {
         taskId: taskId,
       );
 
-      await _notifications.showActiveReservationNotification(
-        taskId: taskId,
-        taskTitle: '#$taskNumber ${task.title}',
+      // 启动实时更新通知预约态
+      await LiveUpdateService.showReservation(
+        taskTitle: task.title,
         deadline: deadlineAt,
+        taskNum: taskNumber,
       );
+      _liveUpdateState = _LiveUpdateState.reservation;
+      _liveUpdateTaskId = taskId;
     } catch (e) {
-      debugPrint('Error showing reservation notification: $e');
+      debugPrint('Error showing reservation live update: $e');
     }
   }
 
   Future<void> cancelReservation() async {
     await _notifications.cancelReservationReminder();
-    await _notifications.cancelActiveStatusNotification();
+    await LiveUpdateService.dismiss();
+    _liveUpdateState = _LiveUpdateState.none;
+    _liveUpdateTaskId = null;
     _state = _state.copyWith(clearActiveReservation: true);
     await _persist();
   }
 
+  // 周期状态推进：防抖守卫，只在状态发生真实变迁时更新，防止触发系统限流
   Future<void> syncRuntime({bool notify = true}) async {
+    // 1. 预约缓冲期检查
     final reservation = activeReservation;
-    if (reservation == null) return;
-    if (!reservation.isExpired()) return;
-
-    final task = taskById(reservation.taskId);
-    await _notifications.cancelReservationReminder();
-
-    if (task == null) {
-      await _notifications.cancelActiveStatusNotification();
-      _state = _state.copyWith(clearActiveReservation: true);
-      if (notify) {
-        await _persist();
-      } else {
-        await _storage.saveState(_state);
+    if (reservation != null) {
+      final task = taskById(reservation.taskId);
+      if (reservation.isExpired()) {
+        await cancelReservation();
+        if (task != null) await _startSession(task);
+      } else if (task != null &&
+          (_liveUpdateState != _LiveUpdateState.reservation || _liveUpdateTaskId != task.id)) {
+        await LiveUpdateService.showReservation(
+          taskTitle: task.title,
+          deadline: reservation.deadlineAt,
+          taskNum: getTaskNumber(task),
+        );
+        _liveUpdateState = _LiveUpdateState.reservation;
+        _liveUpdateTaskId = task.id;
       }
       return;
     }
 
-    final session = CtdpSession(
-      taskId: task.id,
-      startedAt: reservation.deadlineAt,
-      timerMode: task.timerMode,
-      durationSeconds: task.durationSeconds,
-    );
+    // 2. 专注执行期检查
+    final session = activeSession;
+    if (session != null) {
+      final task = taskById(session.taskId);
+      if (task != null) {
+        final taskNum = getTaskNumber(task);
 
-    _state = _state.copyWith(
-      clearActiveReservation: true,
-      activeSession: session,
-    );
-
-    final taskNumber = getTaskNumber(task);
-
-    try {
-      await _notifications.showActiveSessionNotification(
-        taskId: task.id,
-        taskTitle: '#$taskNumber ${task.title}',
-        timerMode: task.timerMode,
-        startedAt: reservation.deadlineAt,
-        durationSeconds: task.durationSeconds,
-      );
-    } catch (e) {
-      debugPrint('Error syncing notification: $e');
+        if (session.isPaused) {
+          if (_liveUpdateState != _LiveUpdateState.paused || _liveUpdateTaskId != task.id) {
+            await LiveUpdateService.showPaused(
+              taskTitle: task.title,
+              taskNum: taskNum,
+            );
+            _liveUpdateState = _LiveUpdateState.paused;
+            _liveUpdateTaskId = task.id;
+          }
+        } else if (session.timerMode == TaskTimerMode.countDown && session.isFinished) {
+          if (_liveUpdateState != _LiveUpdateState.overtime || _liveUpdateTaskId != task.id) {
+            final plannedEnd = session.startedAt.add(
+              Duration(seconds: session.durationSeconds + session.totalPausedSeconds),
+            );
+            await LiveUpdateService.showOvertime(
+              taskTitle: task.title,
+              plannedEndTime: plannedEnd,
+              taskNum: taskNum,
+            );
+            _liveUpdateState = _LiveUpdateState.overtime;
+            _liveUpdateTaskId = task.id;
+          }
+        } else if (_liveUpdateState != _LiveUpdateState.focusing || _liveUpdateTaskId != task.id) {
+          await LiveUpdateService.showFocusing(
+            taskTitle: task.title,
+            timerMode: session.timerMode,
+            startedAt: session.startedAt,
+            durationSeconds: session.durationSeconds,
+            totalPausedSeconds: session.totalPausedSeconds,
+            taskNum: taskNum,
+          );
+          _liveUpdateState = _LiveUpdateState.focusing;
+          _liveUpdateTaskId = task.id;
+        }
+      }
+      return;
     }
 
-    if (notify) {
-      await _persist();
-    } else {
-      await _storage.saveState(_state);
+    // 3. 既无预约也无专注任务时，清除实时更新通知
+    if (_liveUpdateState != _LiveUpdateState.none) {
+      await LiveUpdateService.dismiss();
+      _liveUpdateState = _LiveUpdateState.none;
+      _liveUpdateTaskId = null;
     }
   }
 }

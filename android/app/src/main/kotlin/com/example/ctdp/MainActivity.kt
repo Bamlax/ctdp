@@ -4,6 +4,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import androidx.core.app.NotificationCompat
@@ -16,7 +17,8 @@ class MainActivity : FlutterActivity() {
 
     companion object {
         private const val NOTIFICATION_ID = 2026
-        private const val CHANNEL_ID = "ctdp_live_updates_channel"
+        // 升级渠道 ID，清除系统对旧渠道的横幅展开缓存
+        private const val CHANNEL_ID = "ctdp_live_updates_v2"
         private const val CHANNEL_NAME = "CTDP 实时更新通知"
     }
 
@@ -56,25 +58,26 @@ class MainActivity : FlutterActivity() {
 
     private fun ensureNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // 规范要求：通知渠道不得具有 IMPORTANCE_MIN，设为 HIGH 以触发状态栏芯片
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            // 删除旧版会触发横幅弹窗展开的高优先级渠道
+            manager.deleteNotificationChannel("ctdp_live_updates_channel")
+
+            // 规范要求：不得为 IMPORTANCE_MIN。使用 IMPORTANCE_DEFAULT 满足实时更新，同时彻底杜绝自动弹横幅展开
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_HIGH
+                NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
-                description = "展示专注倒计时与锁屏/状态栏实时更新活动"
-                setShowBadge(true)
+                description = "展示专注倒计时与锁屏/状态栏实时活动"
+                setShowBadge(false)
                 setSound(null, null)
                 enableVibration(false)
             }
-            val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
         }
     }
 
-    /**
-     * 遵循谷歌官方实时更新（Promoted Ongoing / Live Updates）规范构建通知
-     */
     private fun postLiveUpdateNotification(
         title: String,
         text: String,
@@ -96,7 +99,6 @@ class MainActivity : FlutterActivity() {
             )
         } else null
 
-        // 规范：大卡片必须为标准样式 BigTextStyle
         val bigTextStyle = NotificationCompat.BigTextStyle()
             .bigText(text)
             .setBigContentTitle(title)
@@ -106,12 +108,14 @@ class MainActivity : FlutterActivity() {
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(bigTextStyle)
-            .setOngoing(true)                      // 规范：必须为 ongoing
-            .setGroupSummary(false)                // 规范：不得是群组摘要
-            .setColorized(false)                   // 规范：严格禁止 setColorized(true)，否则丧失胶囊资格
-            .setOnlyAlertOnce(true)
+            .setOngoing(true)
+            .setGroupSummary(false)
+            .setColorized(false)
             .setAutoCancel(false)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(true)
+            // 关键点：设置为静默 + DEFAULT 优先级，杜绝屏幕上方弹出浮动横幅大卡片
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setCategory(
                 if (category == "alarm") NotificationCompat.CATEGORY_ALARM
                 else NotificationCompat.CATEGORY_STOPWATCH
@@ -119,7 +123,6 @@ class MainActivity : FlutterActivity() {
 
         pendingIntent?.let { builder.setContentIntent(it) }
 
-        // 规范：计时器模式与时间戳配置
         if (useChronometer) {
             builder.setUsesChronometer(true)
             builder.setChronometerCountDown(isCountdown)
@@ -130,7 +133,7 @@ class MainActivity : FlutterActivity() {
             builder.setShowWhen(false)
         }
 
-        // 规范：申请推广宣传并注入状态条状标签文本（限制 7 字符内）
+        // 注入实时更新标识与状态条状标签文本（限制 7 字符以内）
         val extras = Bundle().apply {
             putBoolean("android.requestPromotedOngoing", true)
             if (!shortText.isNullOrEmpty()) {
@@ -139,12 +142,12 @@ class MainActivity : FlutterActivity() {
         }
         builder.addExtras(extras)
 
-        val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, builder.build())
     }
 
     private fun dismissLiveUpdateNotification() {
-        val manager = applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.cancel(NOTIFICATION_ID)
     }
 }

@@ -14,6 +14,13 @@ class VersionRecord {
 /// CTDP 版本更新记录
 const List<VersionRecord> ctdpVersionHistory = [
   VersionRecord(
+    version: '0.3.1',
+    releaseDate: '2026-09-23',
+    changes: [
+      '优化：流体云的弹出功能',
+    ],
+  ),
+  VersionRecord(
   version: '0.3.0',
   releaseDate: '2026-09-22',
   changes: [
@@ -32,7 +39,7 @@ const List<VersionRecord> ctdpVersionHistory = [
     '修复：任务不存在时界面展示异常的问题',
   ],
 ),
-    VersionRecord(
+  VersionRecord(
     version: '0.2.0',
     releaseDate: '2026-09-21',
     changes: [

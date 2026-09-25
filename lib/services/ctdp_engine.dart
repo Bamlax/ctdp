@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
+import 'package:home_widget/home_widget.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/ctdp_state.dart';
@@ -29,7 +30,6 @@ class CtdpController extends ChangeNotifier {
   CtdpState _state = CtdpState.initial();
   bool _initialized = false;
 
-  // 实时更新状态守卫，避免每秒高频下发导致系统通知限流
   _LiveUpdateState _liveUpdateState = _LiveUpdateState.none;
   String? _liveUpdateTaskId;
 
@@ -263,27 +263,24 @@ class CtdpController extends ChangeNotifier {
     await _storage.saveState(_state);
   }
 
-  int folderHeight(String folderId, [Set<String>? visited]) {
+  // 计算树深度（距离根节点的层级）：根目录为 0，一级子文件夹为 1
+  int folderDepth(String folderId, [Set<String>? visited]) {
     final seen = visited ?? <String>{};
     if (seen.contains(folderId)) return 0;
     seen.add(folderId);
 
-    final children = folders.where((f) => f.parentId == folderId).toList();
-    if (children.isEmpty) return 0;
-    int maxChild = 0;
-    for (final child in children) {
-      final h = folderHeight(child.id, Set<String>.from(seen));
-      if (h > maxChild) maxChild = h;
-    }
-    return maxChild + 1;
+    final folder = folderById(folderId);
+    if (folder == null || folder.parentId == null) return 0;
+    return folderDepth(folder.parentId!, seen) + 1;
   }
 
+  // 修复：使用深度计算前缀，确保所有新建根文件夹与已有根文件夹位置、层级（##）完全相同
   String folderPrefix(String folderId) {
     final folder = folderById(folderId);
     if (folder == null) return '##1';
 
-    final h = folderHeight(folderId);
-    final hashes = List.filled(h + 2, '#').join();
+    final depth = folderDepth(folderId);
+    final hashes = List.filled(depth + 2, '#').join();
 
     final siblings = folders.where((f) => f.parentId == folder.parentId).toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
@@ -339,12 +336,27 @@ class CtdpController extends ChangeNotifier {
     _state = await _storage.loadState();
     _initialized = true;
     await syncRuntime(notify: false);
+    await syncWidgetData();
     notifyListeners();
+  }
+
+  // 同步当前链长数据至桌面小组件
+  Future<void> syncWidgetData() async {
+    try {
+      final streak = activeStreakLength;
+      await HomeWidget.saveWidgetData<int>('streak_length', streak);
+      await HomeWidget.saveWidgetData<String>('streak_text', '$streak');
+      await HomeWidget.updateWidget(
+        name: 'CtdpWidgetProvider',
+        androidName: 'CtdpWidgetProvider',
+      );
+    } catch (_) {}
   }
 
   Future<void> _persist() async {
     notifyListeners();
     await _storage.saveState(_state);
+    await syncWidgetData();
   }
 
   Future<bool> requestNotificationPermission() {
@@ -720,7 +732,6 @@ class CtdpController extends ChangeNotifier {
 
     final taskNumber = getTaskNumber(task);
 
-    // 唤起实时更新通知
     await LiveUpdateService.showFocusing(
       taskTitle: task.title,
       timerMode: task.timerMode,
@@ -750,7 +761,6 @@ class CtdpController extends ChangeNotifier {
     final task = taskById(session.taskId);
     if (task != null) {
       final taskNumber = getTaskNumber(task);
-      // 实时更新通知转入暂停态
       await LiveUpdateService.showPaused(
         taskTitle: task.title,
         taskNum: taskNumber,
@@ -842,7 +852,6 @@ class CtdpController extends ChangeNotifier {
       clearActiveSession: true,
     );
 
-    // 完成任务清除实时更新
     await LiveUpdateService.dismiss();
     _liveUpdateState = _LiveUpdateState.none;
     _liveUpdateTaskId = null;
@@ -880,7 +889,6 @@ class CtdpController extends ChangeNotifier {
       clearActiveReservation: true,
     );
 
-    // 中断清除实时更新
     await LiveUpdateService.dismiss();
     await _notifications.cancelReservationReminder();
     _liveUpdateState = _LiveUpdateState.none;
@@ -926,7 +934,6 @@ class CtdpController extends ChangeNotifier {
         taskId: taskId,
       );
 
-      // 启动实时更新通知预约态
       await LiveUpdateService.showReservation(
         taskTitle: task.title,
         deadline: deadlineAt,
@@ -948,9 +955,7 @@ class CtdpController extends ChangeNotifier {
     await _persist();
   }
 
-  // 周期状态推进：防抖守卫，只在状态发生真实变迁时更新，防止触发系统限流
   Future<void> syncRuntime({bool notify = true}) async {
-    // 1. 预约缓冲期检查
     final reservation = activeReservation;
     if (reservation != null) {
       final task = taskById(reservation.taskId);
@@ -970,7 +975,6 @@ class CtdpController extends ChangeNotifier {
       return;
     }
 
-    // 2. 专注执行期检查
     final session = activeSession;
     if (session != null) {
       final task = taskById(session.taskId);
@@ -1015,7 +1019,6 @@ class CtdpController extends ChangeNotifier {
       return;
     }
 
-    // 3. 既无预约也无专注任务时，清除实时更新通知
     if (_liveUpdateState != _LiveUpdateState.none) {
       await LiveUpdateService.dismiss();
       _liveUpdateState = _LiveUpdateState.none;

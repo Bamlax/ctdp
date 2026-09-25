@@ -138,7 +138,6 @@ class _CtdpAppState extends State<CtdpApp> {
           return;
         }
 
-        // 关键修复：点击桌面小组件的“预约”时，严格启动快速预约缓冲，绝不跳过直接进入正计时
         await _controller.startQuickReservationForFirstTask();
         _navigateToTask(firstTask.id);
       } catch (e) {
@@ -154,8 +153,6 @@ class _CtdpAppState extends State<CtdpApp> {
 
   void _navigateToTask(String taskId) {
     if (_controller.taskById(taskId) == null) return;
-
-    // 关键修复：清除旧的堆叠页面，直接推入唯一的 FocusScreen，杜绝多层返回问题
     _navigatorKey.currentState?.popUntil((route) => route.isFirst);
     _navigatorKey.currentState?.push(
       MaterialPageRoute(
@@ -211,6 +208,7 @@ class CtdpHome extends StatefulWidget {
 class _CtdpHomeState extends State<CtdpHome> {
   int _currentIndex = 0;
   late final List<Widget> _pages;
+  final ScrollController _taskTreeScrollController = ScrollController();
 
   static const _titles = ['CTDP', '任务树', '历史', '设置'];
 
@@ -219,19 +217,46 @@ class _CtdpHomeState extends State<CtdpHome> {
     super.initState();
     _pages = [
       HomeScreen(controller: widget.controller),
-      TaskTreeScreen(controller: widget.controller),
+      TaskTreeScreen(
+        controller: widget.controller,
+        scrollController: _taskTreeScrollController,
+      ),
       HistoryScreen(controller: widget.controller),
       SettingsScreen(controller: widget.controller),
     ];
   }
 
   @override
+  void dispose() {
+    _taskTreeScrollController.dispose();
+    super.dispose();
+  }
+
+  // 平滑滚动至任务树最底部
+  void _scrollTaskTreeToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_taskTreeScrollController.hasClients) {
+        _taskTreeScrollController.animateTo(
+          _taskTreeScrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          _titles[_currentIndex],
-          style: const TextStyle(fontWeight: FontWeight.w700),
+        title: InkWell(
+          onTap: () {
+            if (_currentIndex == 1) _scrollTaskTreeToBottom();
+          },
+          child: Text(
+            _titles[_currentIndex],
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
         ),
       ),
       body: IndexedStack(
@@ -241,6 +266,10 @@ class _CtdpHomeState extends State<CtdpHome> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex,
         onDestinationSelected: (index) {
+          if (index == 1) {
+            // 每次点击导航栏“任务树”均自动滑到最下方
+            _scrollTaskTreeToBottom();
+          }
           setState(() => _currentIndex = index);
         },
         destinations: const [

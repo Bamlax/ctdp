@@ -13,6 +13,15 @@ class VersionRecord {
 
 /// CTDP 版本更新记录
 const List<VersionRecord> ctdpVersionHistory = [
+    VersionRecord(
+    version: '0.3.2',
+    releaseDate: '2026-09-25',
+    changes: [
+      '优化：小组件的显示链长度',
+      '优化：新建文件夹的位置',
+      '优化：任务树自动显示到最下方',
+    ],
+  ),
   VersionRecord(
     version: '0.3.1',
     releaseDate: '2026-09-23',

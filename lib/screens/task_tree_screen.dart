@@ -6,21 +6,47 @@ import '../services/ctdp_engine.dart';
 import 'focus_screen.dart';
 import 'task_edit_screen.dart';
 
-class TaskTreeScreen extends StatelessWidget {
+class TaskTreeScreen extends StatefulWidget {
   final CtdpController controller;
+  final ScrollController? scrollController;
 
   const TaskTreeScreen({
     super.key,
     required this.controller,
+    this.scrollController,
   });
 
-  Future<void> _showFolderDialog(
-    BuildContext context, {
+  @override
+  State<TaskTreeScreen> createState() => _TaskTreeScreenState();
+}
+
+class _TaskTreeScreenState extends State<TaskTreeScreen> {
+  late final ScrollController _scrollController;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController = widget.scrollController ?? ScrollController();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOutCubic,
+        );
+      }
+    });
+  }
+
+  Future<void> _showFolderDialog({
     String? editFolderId,
     String? parentId,
     String? childFolderId,
   }) async {
-    final folder = editFolderId != null ? controller.folderById(editFolderId) : null;
+    final folder = editFolderId != null ? widget.controller.folderById(editFolderId) : null;
     final textController = TextEditingController(text: folder?.name ?? '');
 
     String title = '新建文件夹';
@@ -65,45 +91,49 @@ class TaskTreeScreen extends StatelessWidget {
       ),
     );
 
-    if (confirmed != true || !context.mounted) return;
+    if (confirmed != true || !mounted) return;
     final name = textController.text.trim();
     if (name.isEmpty) return;
 
     try {
       if (editFolderId != null) {
-        await controller.renameFolder(folderId: editFolderId, name: name);
+        await widget.controller.renameFolder(folderId: editFolderId, name: name);
       } else if (childFolderId != null) {
-        await controller.createParentFolder(targetFolderId: childFolderId, name: name);
+        await widget.controller.createParentFolder(targetFolderId: childFolderId, name: name);
       } else {
-        await controller.createFolder(name: name, parentId: parentId);
+        await widget.controller.createFolder(name: name, parentId: parentId);
       }
+      // 新建文件夹后自动滑到最下方
+      _scrollToBottom();
     } catch (e) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     }
   }
 
-  Future<void> _createTask(BuildContext context, {required String folderId}) async {
+  Future<void> _createTask({required String folderId}) async {
     final taskId = await Navigator.of(context).push<String>(
       MaterialPageRoute(
         builder: (_) => TaskEditScreen(
-          controller: controller,
+          controller: widget.controller,
           initialFolderId: folderId,
         ),
       ),
     );
 
-    if (taskId == null || !context.mounted) return;
-    final task = controller.taskById(taskId);
+    if (taskId == null || !mounted) return;
+    final task = widget.controller.taskById(taskId);
     if (task == null) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('已创建任务「${task.title}」。')),
     );
+    // 新建任务后自动滑到最下方
+    _scrollToBottom();
   }
 
-  Future<void> _showConcludeChainDialog(BuildContext context, CtdpTask task) async {
-    final taskNum = controller.getTaskNumber(task);
+  Future<void> _showConcludeChainDialog(CtdpTask task) async {
+    final taskNum = widget.controller.getTaskNumber(task);
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -137,15 +167,15 @@ class TaskTreeScreen extends StatelessWidget {
     );
 
     if (confirmed == true) {
-      await controller.concludeChain(task.id);
-      if (!context.mounted) return;
+      await widget.controller.concludeChain(task.id);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('当前链已圆满完成（共 #$taskNum 环）！下一个任务将从 #1 开启。')),
       );
     }
   }
 
-  Future<void> _deleteFolder(BuildContext context, CtdpFolder folder) async {
+  Future<void> _deleteFolder(CtdpFolder folder) async {
     final confirmed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -175,50 +205,46 @@ class TaskTreeScreen extends StatelessWidget {
       ),
     );
 
-    if (confirmed != true || !context.mounted) return;
+    if (confirmed != true || !mounted) return;
 
     try {
-      await controller.deleteFolder(folder.id);
-      if (!context.mounted) return;
+      await widget.controller.deleteFolder(folder.id);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('已删除「${folder.name}」。')),
       );
     } catch (e) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
     }
   }
 
-  Future<void> _openTask(BuildContext context, CtdpTask task) async {
+  Future<void> _openTask(CtdpTask task) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => FocusScreen(
-          controller: controller,
+          controller: widget.controller,
           taskId: task.id,
         ),
       ),
     );
   }
 
-  Future<void> _editTask(BuildContext context, CtdpTask task) async {
+  Future<void> _editTask(CtdpTask task) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => TaskEditScreen(
-          controller: controller,
+          controller: widget.controller,
           taskId: task.id,
         ),
       ),
     );
   }
 
-  // ============================================================
-  // 静态节点：已完成、中断失败的链条（8px 微缩进）
-  // ============================================================
-
-  Widget _buildStaticHistoricalTask(BuildContext context, CtdpTask task) {
+  Widget _buildStaticHistoricalTask(CtdpTask task) {
     final isFailed = task.isFailed;
-    final taskNum = controller.getTaskNumber(task);
-    final canConcludeChain = controller.isLastCompletedTaskOfChain(task);
+    final taskNum = widget.controller.getTaskNumber(task);
+    final canConcludeChain = widget.controller.isLastCompletedTaskOfChain(task);
 
     String overtimeLabel = '';
     if (task.overtimeSeconds > 0) {
@@ -228,7 +254,7 @@ class TaskTreeScreen extends StatelessWidget {
 
     return Padding(
       key: ValueKey('static_task_${task.id}'),
-      padding: const EdgeInsets.only(left: 8, bottom: 2), // 紧凑微缩进 8px
+      padding: const EdgeInsets.only(left: 8, bottom: 2),
       child: Card(
         elevation: 0,
         margin: const EdgeInsets.symmetric(vertical: 2),
@@ -305,9 +331,9 @@ class TaskTreeScreen extends StatelessWidget {
             padding: EdgeInsets.zero,
             iconSize: 18,
             onSelected: (value) {
-              if (value == 'open') _openTask(context, task);
-              if (value == 'edit') _editTask(context, task);
-              if (value == 'conclude_chain') _showConcludeChainDialog(context, task);
+              if (value == 'open') _openTask(task);
+              if (value == 'edit') _editTask(task);
+              if (value == 'conclude_chain') _showConcludeChainDialog(task);
             },
             itemBuilder: (_) => [
               const PopupMenuItem(value: 'open', child: Text('打开任务')),
@@ -321,18 +347,14 @@ class TaskTreeScreen extends StatelessWidget {
               ],
             ],
           ),
-          onTap: () => _openTask(context, task),
+          onTap: () => _openTask(task),
         ),
       ),
     );
   }
 
-  // ============================================================
-  // 动态待办节点：支持长按拖动（8px 微缩进）
-  // ============================================================
-
-  Widget _buildMovablePendingTask(BuildContext context, CtdpTask task, int indexInFolder) {
-    final taskNum = controller.getTaskNumber(task);
+  Widget _buildMovablePendingTask(CtdpTask task, int indexInFolder) {
+    final taskNum = widget.controller.getTaskNumber(task);
 
     final cardContent = Card(
       elevation: 0,
@@ -394,15 +416,15 @@ class TaskTreeScreen extends StatelessWidget {
           padding: EdgeInsets.zero,
           iconSize: 18,
           onSelected: (value) {
-            if (value == 'open') _openTask(context, task);
-            if (value == 'edit') _editTask(context, task);
+            if (value == 'open') _openTask(task);
+            if (value == 'edit') _editTask(task);
           },
           itemBuilder: (_) => const [
             PopupMenuItem(value: 'open', child: Text('打开任务')),
             PopupMenuItem(value: 'edit', child: Text('编辑任务')),
           ],
         ),
-        onTap: () => _openTask(context, task),
+        onTap: () => _openTask(task),
       ),
     );
 
@@ -410,7 +432,7 @@ class TaskTreeScreen extends StatelessWidget {
       key: ValueKey('movable_task_${task.id}'),
       onWillAcceptWithDetails: (details) => details.data.id != task.id,
       onAcceptWithDetails: (details) {
-        controller.moveTaskInTree(
+        widget.controller.moveTaskInTree(
           taskId: details.data.id,
           targetFolderId: task.folderId!,
           targetIndexInFolder: indexInFolder,
@@ -420,7 +442,7 @@ class TaskTreeScreen extends StatelessWidget {
         final isHovered = candidateData.isNotEmpty;
 
         return Padding(
-          padding: const EdgeInsets.only(left: 8, bottom: 2), // 紧凑微缩进 8px
+          padding: const EdgeInsets.only(left: 8, bottom: 2),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -452,20 +474,15 @@ class TaskTreeScreen extends StatelessWidget {
     );
   }
 
-  // ============================================================
-  // 文件夹卡片：子文件夹相对父级微缩进 8px
-  // ============================================================
-
-  Widget _buildFolder(BuildContext context, CtdpFolder folder, int depth) {
-    final children = controller.childrenOf(folder.id);
-    final tasks = controller.tasksInFolder(folder.id);
-    final prefix = controller.folderPrefix(folder.id);
+  Widget _buildFolder(CtdpFolder folder, int depth) {
+    final children = widget.controller.childrenOf(folder.id);
+    final tasks = widget.controller.tasksInFolder(folder.id);
+    final prefix = widget.controller.folderPrefix(folder.id);
 
     final historicalTasks = tasks.where((t) => !t.isPending).toList();
     final pendingTasks = tasks.where((t) => t.isPending).toList();
 
     return Padding(
-      // 根目录无缩进，子文件夹相对父级仅缩进 8px，杜绝指数叠加
       padding: EdgeInsets.only(left: depth == 0 ? 0 : 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -474,7 +491,7 @@ class TaskTreeScreen extends StatelessWidget {
             key: ValueKey('folder_${folder.id}'),
             onWillAcceptWithDetails: (details) => details.data.folderId != folder.id,
             onAcceptWithDetails: (details) {
-              controller.moveTaskInTree(
+              widget.controller.moveTaskInTree(
                 taskId: details.data.id,
                 targetFolderId: folder.id,
                 targetIndexInFolder: tasks.length,
@@ -512,19 +529,19 @@ class TaskTreeScreen extends StatelessWidget {
                     onSelected: (value) {
                       switch (value) {
                         case 'child':
-                          _showFolderDialog(context, parentId: folder.id);
+                          _showFolderDialog(parentId: folder.id);
                           break;
                         case 'parent':
-                          _showFolderDialog(context, childFolderId: folder.id);
+                          _showFolderDialog(childFolderId: folder.id);
                           break;
                         case 'task':
-                          _createTask(context, folderId: folder.id);
+                          _createTask(folderId: folder.id);
                           break;
                         case 'edit':
-                          _showFolderDialog(context, editFolderId: folder.id);
+                          _showFolderDialog(editFolderId: folder.id);
                           break;
                         case 'delete':
-                          _deleteFolder(context, folder);
+                          _deleteFolder(folder);
                           break;
                       }
                     },
@@ -541,19 +558,13 @@ class TaskTreeScreen extends StatelessWidget {
               );
             },
           ),
-
-          // 1. 历史链条任务（微缩进 8px）
-          ...historicalTasks.map((t) => _buildStaticHistoricalTask(context, t)),
-
-          // 2. 未完成待办任务（微缩进 8px）
+          ...historicalTasks.map((t) => _buildStaticHistoricalTask(t)),
           ...List.generate(pendingTasks.length, (i) {
             final t = pendingTasks[i];
             final realIndex = historicalTasks.length + i;
-            return _buildMovablePendingTask(context, t, realIndex);
+            return _buildMovablePendingTask(t, realIndex);
           }),
-
-          // 3. 递归子文件夹（相对父级缩进 8px）
-          ...children.map((child) => _buildFolder(context, child, depth + 1)),
+          ...children.map((child) => _buildFolder(child, depth + 1)),
         ],
       ),
     );
@@ -562,20 +573,21 @@ class TaskTreeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: widget.controller,
       builder: (context, _) {
-        final rootFolders = controller.childrenOf(null);
+        final rootFolders = widget.controller.childrenOf(null);
 
         return Scaffold(
           backgroundColor: Colors.transparent,
           floatingActionButton: FloatingActionButton.extended(
-            onPressed: () => _showFolderDialog(context),
+            onPressed: () => _showFolderDialog(),
             tooltip: '新建文件夹',
             icon: const Icon(Icons.create_new_folder_outlined),
             label: const Text('新建文件夹'),
           ),
           body: SafeArea(
             child: ListView(
+              controller: _scrollController,
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
               children: [
                 if (rootFolders.isEmpty)
@@ -591,7 +603,7 @@ class TaskTreeScreen extends StatelessWidget {
                     ),
                   )
                 else
-                  ...rootFolders.map((f) => _buildFolder(context, f, 0)),
+                  ...rootFolders.map((f) => _buildFolder(f, 0)),
               ],
             ),
           ),
